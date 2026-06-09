@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3GetObjectAssets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "${assets_bucket_arn}/*"
+    },
+    {
+      "Sid": "S3ListBucketAssets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "${assets_bucket_arn}"
+    },
+    {
+      "Sid": "ExecuteApiInvokeVault",
+      "Effect": "Allow",
+      "Action": [
+        "execute-api:Invoke"
+      ],
+      "Resource": "${api_execution_arn}/*"
+    }
+  ]
+}

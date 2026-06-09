@@ -1,0 +1,47 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3ReadWriteQuarantine",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "${quarantine_bucket_arn}/*"
+    },
+    {
+      "Sid": "S3ReadAssetsBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "${assets_bucket_arn}/*"
+    },
+    {
+      "Sid": "S3ListAssetsBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "${assets_bucket_arn}"
+    },
+    {
+      "Sid": "KMSDecryptGenerateDataKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "${kms_key_arn}"
+    },
+    {
+      "Sid": "InvokeVaultAPI",
+      "Effect": "Allow",
+      "Action": [
+        "execute-api:Invoke"
+      ],
+      "Resource": "${vault_api_execution_arn}/*"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+info:
+  title: Treatment Data Contract
+  treatmentDocumentVersion: 0.0.1
+  treatmentSpecificationVersion: 0.1.1
+  description: This Treatment Document outlines the details of data treatment to be
+    applied.
+  uuid: 4acc5bfb473ad618fb4746bf016d435b
+  sourceDataDomain: banking
+  dataSetSource: retail_transactional_banking
+schema:
+  type: json-schema
+  specification:
+    fileMetadata:
+      name: cards.csv
+      description: The purpose of this dataset is to provide the sensitive values
+        of cards data.
+      logicalName: cards
+      fileFormat: csv
+      compressionType: bz2
+      records:
+      - recordName: cards
+        description: This record consists of the treatment data.
+        fields:
+        - fieldName: CARD_NUMBER
+          fieldIndex: 0
+          businessName: CARD_NUMBER
+          logicalType: Varchar
+          physicalType: Varchar
+          isNullable: true
+          treatment:
+            encryptionType: FPE
+            parameters:
+              parameters: bankCardNumber
+            validation:
+              luhnCheck: true
+              regex: (?<!\d)(?:\d[ \-._]?){11,18}\d(?!\d)
+          lengthFilter: ''
+          typeFilter: Numeric
+          tags: ''
+        - fieldName: REMITTER_ACCOUNT
+          fieldIndex: 1
+          businessName: REMITTER_ACCOUNT
+          logicalType: Varchar
+          physicalType: Varchar
+          isNullable: true
+          treatment:
+            encryptionType: FPE
+            parameters:
+              parameters: bankCardNumber
+            validation:
+              luhnCheck: true
+              regex: (?<!\d)(?:\d[ \-._]?){11,18}\d(?!\d)
+          lengthFilter: ''
+          typeFilter: Numeric
+          tags: ''
+        - fieldName: STATEMENT
+          fieldIndex: 2
+          businessName: STATEMENT
+          logicalType: Varchar
+          physicalType: Varchar
+          isNullable: true
+          treatment:
+            encryptionType: FPE
+            parameters:
+              parameters: bankCardNumber
+            validation:
+              luhnCheck: true
+              regex: (?<!\d)(?:\d[ \-._]?){11,18}\d(?!\d)
+          lengthFilter: ''
+          typeFilter: Numeric
+          tags: ''
+        - fieldName: BENEFICIARY_ACCOUNT
+          fieldIndex: 3
+          businessName: BENEFICIARY_ACCOUNT
+          logicalType: Varchar
+          physicalType: Varchar
+          isNullable: true
+          treatment:
+            encryptionType: FPE
+            parameters:
+              parameters: bankCardNumber
+            validation:
+              luhnCheck: true
+              regex: (?<!\d)(?:\d[ \-._]?){11,18}\d(?!\d)
+          lengthFilter: ''
+          typeFilter: Numeric
+          tags: ''
+# quality:
+#   qualityCheckType: SodaCL
+#   dataQualityCheckFile: idap-statement-treatment-checks.yaml

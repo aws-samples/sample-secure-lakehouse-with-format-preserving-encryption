@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeCopyLambda",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": "${copy_lambda_arn}"
+    },
+    {
+      "Sid": "GlueJobExecution",
+      "Effect": "Allow",
+      "Action": [
+        "glue:StartJobRun",
+        "glue:GetJobRun"
+      ],
+      "Resource": "${glue_job_arn}"
+    }
+  ]
+}

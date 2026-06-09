@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3ReadDeleteQuarantine",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "${quarantine_bucket_arn}/*"
+    },
+    {
+      "Sid": "S3ListQuarantine",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "${quarantine_bucket_arn}"
+    },
+    {
+      "Sid": "S3WriteLanding",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "${landing_bucket_arn}/*"
+    },
+    {
+      "Sid": "KMSDecryptGenerateDataKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "${kms_key_arn}"
+    }
+  ]
+}

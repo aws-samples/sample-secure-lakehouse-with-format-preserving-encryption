@@ -1,0 +1,7 @@
+# NOTE: Do NOT bundle boto3/botocore here. They are already provided by the
+# Glue 5.0 runtime. Bundling them via --extra-py-files shadows the runtime copy
+# with a zipped one, and botocore cannot load its data files (endpoints.json,
+# service models) from inside a zip -> "DataNotFoundError: Unable to load data
+# for: endpoints". Only bundle packages that are missing from the Glue runtime.hwedbbj
+PyYAML==6.0.2
+requests==2.32.3

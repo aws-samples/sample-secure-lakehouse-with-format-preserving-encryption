@@ -715,7 +715,7 @@ def encrypt_dataframe_mappartitions(
                 }
                 
                 # Make API call
-                base_url = args["vault_api_url"].rstrip("/")
+                base_url = encryption_api_url.rstrip("/")
                 url = f"{base_url}/transform/encrypt"
                 logger2.warning(f"**{sensitive_column}: Making API call to {url} for chunk_id {chunk_id} to process {len(api_input_payload)} credit cards\n")
                 

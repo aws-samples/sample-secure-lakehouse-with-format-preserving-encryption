@@ -596,10 +596,6 @@ def encrypt_dataframe_mappartitions(
     This function uses mapPartitions for distributed processing.
     Each partition will be processed independently in parallel.
     
-    Glue worker log will be available in Error Logs(Stderr) not Output Logs(stdout), including Exceptions, Stack traces and Failed Spark stages in distributed tasks.
-    Suggest to use print() inside mapPartitions as it is more efficient than making log-back appender that sends logs over the network back to driver, which is error-prone.
-    The function named process_partition can be run on all executors when you process a data frame, so the print will stay on executor and sent to Error Logs.
-    The driver isn't the one running the code so it can't be logged to.
     
     Args:
         spark: SparkSession
@@ -715,7 +711,7 @@ def encrypt_dataframe_mappartitions(
                 }
                 
                 # Make API call
-                base_url = args["vault_api_url"].rstrip("/")
+                base_url = encryption_api_url.rstrip("/")
                 url = f"{base_url}/transform/encrypt"
                 logger2.warning(f"**{sensitive_column}: Making API call to {url} for chunk_id {chunk_id} to process {len(api_input_payload)} credit cards\n")
                 
@@ -1039,46 +1035,6 @@ def remove_row_indexes(df: DataFrame) -> DataFrame:
     """
     df = df.orderBy(col("enc_row_index")).drop("enc_row_index")
     return df
-
-
-# def write_df_to_s3_csv_bz2_pandas(args, df: DataFrame, logger2) -> None:
-#     """
-#     Write a DataFrame to S3 as a bz2-compressed CSV, preserving folder structure
-#     and placing the output in an "encrypted" subfolder next to the ingest file.
-
-#     Args:
-#         df (DataFrame): PySpark DataFrame to write
-#         args (dict): Dictionary containing keys:
-#             - "ingest_file" (str): full S3 URI to input file
-#             - "SourceBucketName" (str): bucket name
-#     """
-#     # Convert to pandas and write to local bz2 file
-#     try:
-#         local_file = "/tmp/encrypted_output.csv.bz2"
-#         pdf = df.toPandas()
-#         pdf.to_csv(local_file, index=False, compression="bz2")
-
-#         # Parse S3 ingest file path
-#         ingest_path = args["ingest_file"]
-#         bucket_name = args["source_bucket"]
-#         parsed = urlparse(ingest_path)
-
-#         # Extract key path
-#         full_key_path = parsed.path.lstrip("/")  # remove leading slash
-#         path_parts = full_key_path.split("/")
-#         file_name = path_parts[-1]
-#         parent_path = "/".join(path_parts[:-1])
-#         encrypted_key = f"{parent_path}/encrypted/{file_name}"
-
-#         # Upload to S3
-#         s3 = boto3.client("s3")
-#         s3.upload_file(local_file, bucket_name, encrypted_key)
-
-#         logger2.info(f"📦 File uploaded to s3://{bucket_name}/{encrypted_key}")
-
-#     except Exception as e:
-#         logger2.exception("An exception occurred using pandas to write")
-#         raise
 
 
 def write_df_to_s3_csv_bz2(args, df: DataFrame, logger2) -> None:

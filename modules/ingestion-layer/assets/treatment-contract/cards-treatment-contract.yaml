@@ -33,7 +33,7 @@ schema:
               parameters: bankCardNumber
             validation:
               luhnCheck: true
-              regex: (?<!\d)(?:\d[ \-._]?){11,18}\d(?!\d)
+              regex: (?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)
           lengthFilter: ''
           typeFilter: Numeric
           tags: ''
@@ -49,7 +49,7 @@ schema:
               parameters: bankCardNumber
             validation:
               luhnCheck: true
-              regex: (?<!\d)(?:\d[ \-._]?){11,18}\d(?!\d)
+              regex: (?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)
           lengthFilter: ''
           typeFilter: Numeric
           tags: ''
@@ -65,7 +65,7 @@ schema:
               parameters: bankCardNumber
             validation:
               luhnCheck: true
-              regex: (?<!\d)(?:\d[ \-._]?){11,18}\d(?!\d)
+              regex: (?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)
           lengthFilter: ''
           typeFilter: Numeric
           tags: ''
@@ -81,7 +81,7 @@ schema:
               parameters: bankCardNumber
             validation:
               luhnCheck: true
-              regex: (?<!\d)(?:\d[ \-._]?){11,18}\d(?!\d)
+              regex: (?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)
           lengthFilter: ''
           typeFilter: Numeric
           tags: ''

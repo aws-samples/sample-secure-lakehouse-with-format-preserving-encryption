@@ -105,10 +105,6 @@ def process_file(args, spark: SparkSession, logger2):
     dataset = args["dataset"]
     metadata_bucket = args["metadata_bucket"]
     source_bucket = args["source_bucket"]
-    vault_api_url = args["vault_api_url"]
-    bin_file_path = args["bin_file_path"]
-
-
 
     source_file= f"s3://{source_bucket}/{source_key}"
     print(f"Source Data is {source_file} ")
@@ -119,9 +115,7 @@ def process_file(args, spark: SparkSession, logger2):
 
     contract_key = treatment_contract.contract_file_path
     logger2.info(f"Contract file key: {contract_key}")
-    sensitive_columns_details = treatment_contract.get_sensitive_columns_details()
-    print(sensitive_columns_details)
-    sensitive_columns = treatment_contract.get_sensitive_column_names()
+    sensitive_columns = treatment_contract.get_sensitive_columns_details()
     print(sensitive_columns)
 
     # # Read csv input file

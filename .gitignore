@@ -1,0 +1,58 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+backend.hcl
+
+# Terraform plan files
+*.tfplan
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lambda/Glue packaging
+*.zip
+
+# FPE Lambda Layer (built at apply time via build_layer.sh)
+modules/vault-transform-service/assets/fpe_layer/python/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+.kiro/
+
+# Build output (vendored deps, regenerated at apply time)
+.build/
+modules/packager-layer/.build/

@@ -13,10 +13,8 @@ from pyspark.sql.functions import (
     collect_list,
     first,
     array,
-    pandas_udf,
     isnull,
     regexp_extract_all,
-    regexp_instr,
     expr,
     transform,
     struct
@@ -43,11 +41,9 @@ import logging
 from datetime import datetime
 import time
 import json
-import re
 import requests
 from requests.auth import HTTPBasicAuth
 from typing import List, Dict, Any
-import pandas as pd
 from urllib.parse import urlparse
 import random
 
@@ -91,7 +87,7 @@ def explode_identified_sensitive_data(
 ) -> DataFrame:
     """This function takes in an identified data frame with following structure.
 
-    |enc_detected_values                         |enc_row_index|enc_detected_values_position|
+    |enc_detected_values                           |enc_row_index |enc_detected_values_position|
     |----------------------------------------------|--------------|---------------------------|
     |[1111-2222-3333-4444, 5555-6666-7777-8888]    |1             |[(0, 20), (21, 40)]        |
     |[0876-5432-1098-9000]                         |2             |[(0, 25)]                  |
@@ -187,15 +183,22 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
 
     df_reconstructed = df_row_ids
 
-    for sensitive_column in sensitive_columns:
-        logger2.info(f"Processing sensitive column: {sensitive_column}")
+    for sensitive in sensitive_columns:
+        sensitive_column = sensitive.get("fieldName")
+        validation = sensitive.get("validation") or {}
+        column_regex = validation.get("regex", "").strip()
+
+        logger2.info(f"Processing sensitive column: {sensitive_column} using Regex rules: {column_regex}")
+        
+        if not sensitive_columns:
+            continue
 
         #Fake header
         headers = build_headers()
 
         start = datetime.now()
         df_detected = detect_sensitive_data(
-            args, spark, df_reconstructed, sensitive_column, logger2
+            args, spark, df_reconstructed, sensitive_column, column_regex, logger2
         )
         df_detected.cache()
         df_detected.count()  # force materialization into cache
@@ -220,7 +223,7 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
             logger2.info(f"Total number of Credit Card for encryption in {sensitive_column}: {row_count}")
 
             start = datetime.now()
-            # Add chunk_id for distributed processing
+            # Add chunk_id for distributed processing and chunk_size can be tuned based on the requirement
             chunked_df = add_chunk_id(exploded_df, chunk_size=15000)
             end = datetime.now()
             # logger2.info(f"**Chunking process took: {(end - start) / 60:.3f} minutes")
@@ -296,7 +299,7 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
 
     start = datetime.now()
     write_df_to_s3_csv_bz2(args, df_cleansed, logger2)
-    logger2.info(f"File is copied to S3 using Spark Native Writer")
+    logger2.info("File is copied to S3 using Spark Native Writer")
     end = datetime.now()
     logger2.info(f"**Spark Transformation and File is written to S3 process took: {end - start}")
 
@@ -335,7 +338,7 @@ def add_row_indexes(
     )
 
 
-def detect_sensitive_data(args, spark: SparkSession, df: DataFrame, column_to_check, logger2):
+def detect_sensitive_data(args, spark: SparkSession, df: DataFrame, column_to_check, contract_column_regex, logger2):
     """Detect potential credit card numbers in `column_to_check` using a Spark-SQL
     regex extraction (fast, JVM-side) followed by Python UDFs that apply BIN +
     Luhn validation and locate match positions in the original text.
@@ -353,28 +356,26 @@ def detect_sensitive_data(args, spark: SparkSession, df: DataFrame, column_to_ch
     bin_lookup = load_bins_from_s3(bin_path, logger2)
     bc_bin_set = spark.sparkContext.broadcast(bin_lookup)
 
-    # Narrow the DataFrame and stash the original text so we can locate
-    # match positions later against the unmodified column value.
     initial_df = df.select(column_to_check, "enc_row_index")
     final_df = initial_df.withColumn("orig_text", col(column_to_check))
-    #final_df.show(20,truncate=False)
+    
     logger2.info("preprocess completed")
     logger2.info(
         f"Number of partitions after preprocess completed: {final_df.rdd.getNumPartitions()}"
     )
 
-    # 1) Extract candidate card-number-shaped substrings with native Spark SQL.
+    default_column_regex = r"(?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)"
+    final_regex = contract_column_regex or default_column_regex 
+
+
+    # 1) Extract candidate card-number-shaped substrings with native Spark DataFrame API
     #    Pattern allows optional leading zeros and \s . - _ as separators between digits.
     final_df = final_df.withColumn(
         "card_candidates",
-        expr(
-            r"""
-            transform(
-                regexp_extract_all(orig_text, r'(?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)', 1),
-                x -> x
-            )
-            """
-        ),
+        transform(
+            regexp_extract_all(col("orig_text"), lit(final_regex), lit(1)),
+            lambda x: x
+        )
     )
 
     # 2) Strip separators so BIN/Luhn checks see digits only.
@@ -481,8 +482,6 @@ def detect_sensitive_data(args, spark: SparkSession, df: DataFrame, column_to_ch
 
     logger2.info("Sensitive data detection completed")
 
-    #final_df.show(20,truncate=False)
-
     return final_df
 
 
@@ -572,7 +571,7 @@ def has_enc_detected_values(df):
     )
 
 
-# More optimized version using mapPartitions for distributed processing
+# Using mapPartitions for distributed processing
 def encrypt_dataframe_mappartitions(
     args,
     logger2,
@@ -656,14 +655,12 @@ def encrypt_dataframe_mappartitions(
     
     # Define function to process each partition. mapPartitions gives you an iterator over the rows in a partition
     def process_partition(iterator):
-         # Define function to process each partition. mapPartitions gives you an iterator over the rows in a partition.
-        # import traceback
-        # from pyspark import TaskContext
-        # import random
+       # Define function to process each partition. mapPartitions gives you an iterator over the rows in a partition.
         
         task_context = TaskContext.get()
         task_id = task_context.taskAttemptId()
         partition_id = task_context.partitionId()
+
         # For inner function to access variable from outer function
         nonlocal current_headers
         
@@ -696,12 +693,7 @@ def encrypt_dataframe_mappartitions(
                     api_input_payload.append(
                         row["value"]
                     )
-                
-                # Create API payload
-                # now = datetime.utcnow()
-                # request_time = now.strftime("%d/%b/%Y:%H:%M:%S +0000")
-                # request_time_epoch = int(time.mktime(now.timetuple())) * 1000
-                
+                          
                 payload = {
                     "transformationType": transformation,
                     "domainId": domain_id,
@@ -739,7 +731,8 @@ def encrypt_dataframe_mappartitions(
                     except (json.JSONDecodeError, ValueError) as e:
                         logger2.exception("JSON decode error")
                         raise
-                elif response.status_code == 504:
+                # For vault server error
+                elif response.status_code in (501, 502, 503):
                     # 60 seconds between chunks in the same partition
                     base_delay = 6
                     max_retries = 5
@@ -784,7 +777,8 @@ def encrypt_dataframe_mappartitions(
                         else:
                             logger2.warning(f"**{sensitive_column}: Retry {i+1}/{max_retries} failed with status {response.status_code} "
                                             f"for chunk_id {chunk_id}, continuing...")
-                elif response.status_code in (429, 502):
+                # For client error
+                elif response.status_code in (403, 404, 405):
                     # 60 seconds between chunks in the same partition
                     base_delay = 6
                     max_retries = 5
@@ -1041,8 +1035,6 @@ def write_df_to_s3_csv_bz2(args, df: DataFrame, logger2) -> None:
     """
     Write a DataFrame to S3 as a bz2-compressed CSV, preserving folder structure
     and placing the output in an "encrypted" subfolder next to the ingest file.
-    Update from write_df_to_s3_csv_bz2_pandas to write_df_to_s3_csv_bz2
-    as the Pandas Spark action has the performance issue for large file size(3.5 GB+) based on the Load T
 
     Args:
         df (DataFrame): PySpark DataFrame to write
@@ -1065,7 +1057,6 @@ def write_df_to_s3_csv_bz2(args, df: DataFrame, logger2) -> None:
     logger2.info(f"Encryption key: {encrypted_key}")
 
     try:
-        # df1 = df.coalesce(1)
         df.coalesce(1) \
             .write.format("csv") \
             .option("header", "true") \

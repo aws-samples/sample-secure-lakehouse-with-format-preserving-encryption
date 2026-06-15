@@ -4,4 +4,4 @@
 # service models) from inside a zip -> "DataNotFoundError: Unable to load data
 # for: endpoints". Only bundle packages that are missing from the Glue runtime.hwedbbj
 PyYAML==6.0.2
-requests==2.32.3
+requests==2.33.0

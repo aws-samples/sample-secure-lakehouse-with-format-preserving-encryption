@@ -2,9 +2,8 @@ info:
   title: Treatment Data Contract
   treatmentDocumentVersion: 0.0.1
   treatmentSpecificationVersion: 0.1.1
-  description: This Treatment Document outlines the details of data treatment to be
-    applied.
-  uuid: 4acc5bfb473ad618fb4746bf016d435b
+  description: This Treatment Document outlines the details of data treatment to be applied.
+  uuid: 4acc5bfb473ad618fb4746bf016d435a
   sourceDataDomain: banking
   dataSetSource: retail_transactional_banking
 schema:
@@ -34,9 +33,6 @@ schema:
             validation:
               luhnCheck: true
               regex: (?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)
-          lengthFilter: ''
-          typeFilter: Numeric
-          tags: ''
         - fieldName: REMITTER_ACCOUNT
           fieldIndex: 1
           businessName: REMITTER_ACCOUNT
@@ -50,9 +46,6 @@ schema:
             validation:
               luhnCheck: true
               regex: (?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)
-          lengthFilter: ''
-          typeFilter: Numeric
-          tags: ''
         - fieldName: STATEMENT
           fieldIndex: 2
           businessName: STATEMENT
@@ -66,9 +59,6 @@ schema:
             validation:
               luhnCheck: true
               regex: (?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)
-          lengthFilter: ''
-          typeFilter: Numeric
-          tags: ''
         - fieldName: BENEFICIARY_ACCOUNT
           fieldIndex: 3
           businessName: BENEFICIARY_ACCOUNT
@@ -82,9 +72,3 @@ schema:
             validation:
               luhnCheck: true
               regex: (?<!\d)0*([1-9](?:[\s.\-_]?\d){10,18})(?=\D|$)
-          lengthFilter: ''
-          typeFilter: Numeric
-          tags: ''
-# quality:
-#   qualityCheckType: SodaCL
-#   dataQualityCheckFile: idap-statement-treatment-checks.yaml

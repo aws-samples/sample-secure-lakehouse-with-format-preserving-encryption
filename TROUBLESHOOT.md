@@ -109,10 +109,16 @@ This is a local network/DNS issue — your machine cannot resolve AWS endpoints.
 - VPN blocking DNS resolution to AWS endpoints
 - DNS resolver misconfiguration
 
-**Fix:** Check your internet connection, disconnect/reconnect VPN, or try:
+**Fix:** Check your internet connection, disconnect/reconnect VPN:
 
 ```bash
 nslookup sts.us-east-1.amazonaws.com
+```
+
+**Fix:**  or Re-run:
+
+```bash
+terraform apply -var-file=tfvars/terraform.tfvars
 ```
 
 If that fails, your DNS is the problem — not Terraform. Once connectivity is restored, re-run the same Terraform command.

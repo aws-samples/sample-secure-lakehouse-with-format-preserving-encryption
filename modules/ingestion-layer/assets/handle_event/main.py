@@ -66,6 +66,11 @@ def handler(event, context):
             # Derive the source bucket and key strictly from the SQS message body.
             source_bucket, source_key = _extract_source(body)
 
+            # Skip encrypted output files to prevent re-triggering the pipeline
+            if "/encrypted/" in source_key:
+                logger.info("Skipping encrypted output file: %s", source_key)
+                continue
+
             logger.info("Starting Step Functions execution for s3://%s/%s", source_bucket, source_key)
 
             # Start Step Functions execution

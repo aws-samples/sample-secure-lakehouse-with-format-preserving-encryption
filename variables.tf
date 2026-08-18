@@ -150,6 +150,11 @@ variable "glue_timeout" {
   description = "Timeout in minutes for the Glue job execution"
 }
 
+variable "encryption_chunk_size" {
+  type        = number
+  description = "Number of card values batched into each encryption API request. Tune against measured p99 Lambda duration so a chunk completes well inside the API Gateway integration timeout."
+}
+
 variable "glue_max_retries" {
   type        = number
   description = "Maximum number of retries for the Glue job on failure"
@@ -188,9 +193,14 @@ variable "lambda_runtime" {
   description = "Runtime identifier for Vault Transform Service Lambda functions (e.g. python3.12)"
 }
 
-variable "lambda_timeout" {
+variable "encryption_lambda_timeout" {
   type        = number
-  description = "Timeout in seconds for Vault Transform Service Lambda functions"
+  description = "Timeout in seconds for the encryption API Lambda. Keep this strictly below the API Gateway integration timeout (29s by default) so the function fails first and records its own timeout instead of being cut off mid-execution."
+}
+
+variable "secret_generator_lambda_timeout" {
+  type        = number
+  description = "Timeout in seconds for the one-shot secret generator Lambda, which only writes FPE key material to Secrets Manager"
 }
 
 variable "lambda_memory_size" {

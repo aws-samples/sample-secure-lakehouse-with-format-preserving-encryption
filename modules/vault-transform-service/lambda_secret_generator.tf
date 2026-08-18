@@ -13,7 +13,7 @@ resource "aws_lambda_function" "secret_generator" {
   role          = aws_iam_role.secret_generator.arn
   handler       = "main.handler"
   runtime       = var.lambda_runtime
-  timeout       = var.lambda_timeout
+  timeout       = var.secret_generator_lambda_timeout
   memory_size   = var.lambda_memory_size
 
   filename         = data.archive_file.secret_generator.output_path

@@ -181,3 +181,8 @@ variable "glue_max_retries" {
   type        = number
   description = "Glue job max retries"
 }
+
+variable "encryption_chunk_size" {
+  type        = number
+  description = "Number of card values batched into each encryption API request. Tune against measured p99 Lambda duration so a chunk completes well inside the API Gateway integration timeout."
+}

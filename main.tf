@@ -60,19 +60,20 @@ module "landing_layer" {
 module "vault_transform_service" {
   source = "./modules/vault-transform-service"
 
-  vpc_id                      = module.common_layer.vpc_id
-  private_subnet_ids          = module.common_layer.private_subnet_ids
-  lambda_security_group_id    = module.common_layer.lambda_security_group_id
-  glue_security_group_id      = module.common_layer.glue_security_group_id
-  endpoints_security_group_id = module.common_layer.endpoints_security_group_id
-  execute_api_vpc_endpoint_id = module.common_layer.execute_api_vpc_endpoint_id
-  kms_key_arn                 = module.common_layer.kms_key_arn
-  log_group_arn               = module.common_layer.log_group_arn
-  cloudwatch_write_policy_arn = module.common_layer.cloudwatch_write_policy_arn
-  project_name                = var.project_name
-  lambda_runtime              = var.lambda_runtime
-  lambda_timeout              = var.lambda_timeout
-  lambda_memory_size          = var.lambda_memory_size
+  vpc_id                          = module.common_layer.vpc_id
+  private_subnet_ids              = module.common_layer.private_subnet_ids
+  lambda_security_group_id        = module.common_layer.lambda_security_group_id
+  glue_security_group_id          = module.common_layer.glue_security_group_id
+  endpoints_security_group_id     = module.common_layer.endpoints_security_group_id
+  execute_api_vpc_endpoint_id     = module.common_layer.execute_api_vpc_endpoint_id
+  kms_key_arn                     = module.common_layer.kms_key_arn
+  log_group_arn                   = module.common_layer.log_group_arn
+  cloudwatch_write_policy_arn     = module.common_layer.cloudwatch_write_policy_arn
+  project_name                    = var.project_name
+  lambda_runtime                  = var.lambda_runtime
+  encryption_lambda_timeout       = var.encryption_lambda_timeout
+  secret_generator_lambda_timeout = var.secret_generator_lambda_timeout
+  lambda_memory_size              = var.lambda_memory_size
 
   depends_on = [module.common_layer]
 }
@@ -135,6 +136,7 @@ module "ingestion_layer" {
   glue_number_of_workers      = var.glue_number_of_workers
   glue_timeout                = var.glue_timeout
   glue_max_retries            = var.glue_max_retries
+  encryption_chunk_size       = var.encryption_chunk_size
 
   depends_on = [module.packager_layer]
 }

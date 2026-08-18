@@ -71,6 +71,10 @@ glue_number_of_workers = 2
 glue_timeout           = 60
 glue_max_retries       = 0
 
+# Card values batched into each encryption API request. Raise gradually during load
+# testing, keeping p99 Lambda duration well under the API Gateway integration timeout.
+encryption_chunk_size = 15000
+
 # -----------------------------------------------------------------------------
 # Landing Layer — Copy Lambda
 # -----------------------------------------------------------------------------
@@ -85,8 +89,14 @@ copy_lambda_memory_size = 128
 # -----------------------------------------------------------------------------
 
 lambda_runtime     = "python3.12"
-lambda_timeout     = 30
 lambda_memory_size = 256
+
+# Strictly below the 29s API Gateway integration timeout so the Lambda fails first and
+# records its own timeout, rather than being cut off mid-execution while still billing.
+encryption_lambda_timeout = 28
+
+# One-shot key material seeding; completes in well under a second.
+secret_generator_lambda_timeout = 30
 
 # -----------------------------------------------------------------------------
 # Packager Layer — Dependency Packager

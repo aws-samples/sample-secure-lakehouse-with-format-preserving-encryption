@@ -13,7 +13,7 @@ resource "aws_lambda_function" "encryption_api" {
   role          = aws_iam_role.encryption_api.arn
   handler       = "main.handler"
   runtime       = var.lambda_runtime
-  timeout       = var.lambda_timeout
+  timeout       = var.encryption_lambda_timeout
   memory_size   = var.lambda_memory_size
 
   filename         = data.archive_file.encryption_api.output_path

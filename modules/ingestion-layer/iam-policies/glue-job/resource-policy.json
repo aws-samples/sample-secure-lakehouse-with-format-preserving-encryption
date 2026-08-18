@@ -36,12 +36,12 @@
       "Resource": "${kms_key_arn}"
     },
     {
-      "Sid": "InvokeVaultAPI",
+      "Sid": "InvokeVaultEncryptOnly",
       "Effect": "Allow",
       "Action": [
         "execute-api:Invoke"
       ],
-      "Resource": "${vault_api_execution_arn}/*"
+      "Resource": "${vault_api_execution_arn}/*/POST/transform/encrypt"
     }
   ]
 }

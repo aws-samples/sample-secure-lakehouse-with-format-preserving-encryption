@@ -31,6 +31,7 @@ from pyspark.sql.types import (
     StructType,
     StructField,
     IntegerType,
+    LongType,
     MapType,
     BooleanType
 )
@@ -38,36 +39,141 @@ from pyspark.sql.types import (
 from functools import reduce
 import boto3
 import logging
+import os
 from datetime import datetime
 import time
 import json
 import requests
-from requests.auth import HTTPBasicAuth
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 from typing import List, Dict, Any
 from urllib.parse import urlparse
 import random
 
-# Vault-compatible HTTP headers for API Gateway request format.
-# These are informational only — the encryption_api Lambda logs them
-# but does not validate them. Security is enforced by VPC endpoint restriction.
+# The Vault Transform API method uses AWS_IAM authorization, so every request
+# must be SigV4-signed with credentials whose IAM policy allows
+# execute-api:Invoke on POST /transform/encrypt. Reaching the API through the
+# VPC interface endpoint is necessary but not sufficient.
+EXECUTE_API_SERVICE = "execute-api"
+
+# Vault-compatible request headers, kept so the payload and header shape match
+# what a HashiCorp Vault Transform engine expects. They are routing and
+# namespace metadata, not credentials: authentication is SigV4 and the
+# encryption_api Lambda neither reads nor validates these headers.
+#
+# X-Vault-Token is a placeholder retained for shape only. A real Vault
+# deployment would resolve this from Secrets Manager at call time rather than
+# holding it in source.
 VAULT_NAMESPACE = "root"
-VAULT_TOKEN = "demo-placeholder-not-a-real-token"  # noqa: S105 - intentional placeholder
+VAULT_TOKEN = "not-a-credential-sigv4-is-used-instead"  # noqa: S105 - placeholder, not a secret
+
+# One boto3 Session per executor process. Sessions cache the credential
+# resolution chain, so this avoids re-resolving the Glue job role's credentials
+# on every chunk. Signing itself is local and cheap.
+_SESSION = None
 
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+def _get_session():
+    """Return a process-local boto3 Session.
+
+    Created lazily because this runs on Spark executors: a Session built on the
+    driver cannot be pickled and shipped, so each executor builds its own.
+    """
+    global _SESSION
+    if _SESSION is None:
+        _SESSION = boto3.Session()
+    return _SESSION
+
+
+def _resolve_region(url: str) -> str:
+    """Resolve the region to sign with.
+
+    Order: boto3 session (Glue sets AWS_REGION on executors), then the standard
+    environment variables, then the region embedded in the execute-api hostname.
+    The signing region must match the API's region or the signature is rejected.
+    """
+    session_region = _get_session().region_name
+    if session_region:
+        return session_region
+
+    env_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    if env_region:
+        return env_region
+
+    # e.g. abc123.execute-api.us-east-1.amazonaws.com
+    host_parts = urlparse(url).netloc.split(".")
+    if EXECUTE_API_SERVICE in host_parts:
+        return host_parts[host_parts.index(EXECUTE_API_SERVICE) + 1]
+
+    raise RuntimeError(
+        f"Cannot resolve an AWS region for SigV4 signing from url {url}. "
+        "Set AWS_REGION on the Glue job."
+    )
+
 
 def encryption_api(url: str, headers: dict, payload: dict, logger2):
-    """This function takes in the headers and payload from a tenant and forwards the request to encryption api endpoint. Note url should have path specified e.g. /encrypt"""
+    """Send a SigV4-signed POST to the Vault Transform encrypt endpoint.
+
+    The API method is configured with AWS_IAM authorization, so the request is
+    signed with the Glue job role's credentials. Signing happens per call, which
+    also means every retry gets a fresh signature rather than replaying an
+    expired one.
+
+    Note url should have the path specified, e.g. /transform/encrypt.
+
+    Arguments:
+        url: Full invoke URL including the resource path.
+        headers: Caller headers, e.g. the Vault-compatible set from
+            build_headers(). These are included in the signed header set, so the
+            exact values sent must match those signed. Authorization,
+            X-Amz-Date and X-Amz-Security-Token are added by the signer.
+        payload: Request body, serialized to JSON before signing.
+        logger2: Logger that writes to the Spark executor log.
+
+    Returns:
+        requests.Response
+    """
     try:
-        # logger2.error(f"Received following inputs; url: {url}, headers: {headers}, payload: {payload}")
-        response = requests.post(url, headers=headers, json=payload, timeout=60, verify=True)
+        region = _resolve_region(url)
+        credentials = _get_session().get_credentials()
+        if credentials is None:
+            raise RuntimeError(
+                "No AWS credentials available on this executor to sign the "
+                "Vault Transform API request."
+            )
+
+        # SigV4 signs a hash of the exact bytes sent, so the body is serialized
+        # once and reused for both signing and sending. Passing json=payload to
+        # requests would re-serialize it and could produce a different byte
+        # string, which fails signature verification.
+        body = json.dumps(payload)
+
+        request_headers = dict(headers or {})
+        request_headers["Content-Type"] = "application/json"
+        request_headers["Host"] = urlparse(url).netloc
+
+        aws_request = AWSRequest(
+            method="POST",
+            url=url,
+            data=body,
+            headers=request_headers,
+        )
+        SigV4Auth(credentials, EXECUTE_API_SERVICE, region).add_auth(aws_request)
+
+        response = requests.post(
+            url,
+            headers=dict(aws_request.headers),
+            data=body,
+            timeout=60,
+            verify=True,
+        )
 
         #ERROR, WARNING and Print will be logged in glue error log for Executor logs (which run inside mappartition() functions.
         #INFO logs will not be logged for Executor logs (which run inside mappartition() functions.
-        # traceid = headers.get("X-B3-TraceId", "N/A")
         logger2.warning(f"Status Code: {response.status_code}")
         logger2.warning(f"Response JSON: {response.text}")
 
@@ -165,6 +271,12 @@ def add_chunk_id(
     return chunked_df
 
 def build_headers() -> dict:
+    """Vault-compatible request headers.
+
+    These carry no authentication. encryption_api adds Authorization,
+    X-Amz-Date and X-Amz-Security-Token from the Glue job role's credentials via
+    SigV4 at call time, and includes these headers in the signed set.
+    """
     return {
         "X-Vault-Request": "true",
         "X-Vault-Namespace": VAULT_NAMESPACE,
@@ -193,7 +305,9 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
         if not sensitive_columns:
             continue
 
-        #Fake header
+        # Vault-compatible headers, no authentication. SigV4 headers are added
+        # per request inside encryption_api, since a signature is short-lived
+        # and cannot be reused across the retry backoff.
         headers = build_headers()
 
         start = datetime.now()
@@ -223,8 +337,13 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
             logger2.info(f"Total number of Credit Card for encryption in {sensitive_column}: {row_count}")
 
             start = datetime.now()
-            # Add chunk_id for distributed processing and chunk_size can be tuned based on the requirement
-            chunked_df = add_chunk_id(exploded_df, chunk_size=15000)
+            # chunk_size is supplied as the --chunk_size Glue job argument so it can be
+            # tuned per environment without a code change. Size it against measured p99
+            # Lambda duration: a chunk must encrypt well inside the API Gateway
+            # integration timeout, or the request returns 504 on every retry.
+            chunk_size = int(args.get("chunk_size", 15000))
+            logger2.info(f"Using encryption chunk_size={chunk_size} for {sensitive_column}")
+            chunked_df = add_chunk_id(exploded_df, chunk_size=chunk_size)
             end = datetime.now()
             # logger2.info(f"**Chunking process took: {(end - start) / 60:.3f} minutes")
             logger2.info(f"**Chunking process took: {end - start}")
@@ -306,9 +425,7 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
 
 def add_row_indexes(
     df: DataFrame,
-    order_column_name: str = "enc_order_id",
     row_index_column_name: str = "enc_row_index",
-
 ) -> DataFrame:
     """
     Adds unique row IDs.
@@ -319,23 +436,23 @@ def add_row_indexes(
     | 1  | text1     | Note A |
     | 2  | text2     | Note B |
 
-    Example output:
+    Example output (ids are unique and increasing, but not necessarily consecutive —
+    values jump between Spark partitions):
     | id | comments1 | notes  | enc_row_index |
     |----|-----------|--------|----------------|
     | 1  | text1     | Note A | 0             |
-    | 2  | text2     | Note B | 1             |
+    | 2  | text2     | Note B | 8589934592    |
 
     Returns:
         DataFrame: DataFrame with enc_row_index.
     """
-    df_with_order = df.withColumn(order_column_name, monotonically_increasing_id())
-    window = Window.orderBy(order_column_name)
-    return (
-        df_with_order.withColumn("_row_number_int", row_number().over(window) - 1)
-        .withColumn(row_index_column_name, col("_row_number_int"))
-        .drop("_row_number_int")
-        .drop(order_column_name)
-    )
+    # monotonically_increasing_id() is assigned per partition with no shuffle, so it
+    # avoids the single-partition global sort that row_number() over an unpartitioned
+    # window requires. The id is unique and increases with row order, which is all the
+    # downstream joins and the final orderBy need — the values are sparse, not 0..N-1.
+    # NOTE: the id is only stable while the DataFrame is cached; callers must keep the
+    # cache in place because the joins rely on the same value appearing on both sides.
+    return df.withColumn(row_index_column_name, monotonically_increasing_id())
 
 
 def detect_sensitive_data(args, spark: SparkSession, df: DataFrame, column_to_check, contract_column_regex, logger2):
@@ -600,7 +717,8 @@ def encrypt_dataframe_mappartitions(
         spark: SparkSession
         df: DataFrame with values to encrypt
         transformation: Type of transformation to apply
-        headers: HTTP headers for API call
+        headers: Vault-compatible request headers, no authentication. SigV4 auth
+            headers are added per request inside encryption_api.
         encryption_api_url: URL for encryption API
         domain_id: Domain ID
         dataset: Dataset name
@@ -642,16 +760,15 @@ def encrypt_dataframe_mappartitions(
     
     # Define schema for the encrypted rows
     schema = StructType([
-        StructField(row_index_col_name, IntegerType(), True),
+        # LongType: monotonically_increasing_id() encodes the partition index in the
+        # high bits, so values exceed Int32 for any partition beyond the first.
+        StructField(row_index_col_name, LongType(), True),
         StructField("value", StringType(), True),
         StructField(array_item_col_name, IntegerType(), True),
         StructField(index_pos_col_name, StringType(), True),
         StructField(sensitive_column, StringType(), True),
         StructField(encrypted_values_col_name, StringType(), True)
     ])
-    
-    # Store the current headers in an outer scope
-    current_headers = headers
     
     # Define function to process each partition. mapPartitions gives you an iterator over the rows in a partition
     def process_partition(iterator):
@@ -661,9 +778,6 @@ def encrypt_dataframe_mappartitions(
         task_id = task_context.taskAttemptId()
         partition_id = task_context.partitionId()
 
-        # For inner function to access variable from outer function
-        nonlocal current_headers
-        
         # Group rows by chunk_id
         chunk_groups = {}
         for row in iterator:
@@ -707,8 +821,9 @@ def encrypt_dataframe_mappartitions(
                 url = f"{base_url}/transform/encrypt"
                 logger2.warning(f"**{sensitive_column}: Making API call to {url} for chunk_id {chunk_id} to process {len(api_input_payload)} credit cards\n")
                 
-                # current_headers can be either the original headers or new_headers after a token refresh for error 401 within the same partition
-                response = encryption_api(url, current_headers, payload, logger2)
+                # encryption_api signs this request with the Glue job role's
+                # credentials on this executor before sending it.
+                response = encryption_api(url, headers, payload, logger2)
                 
                 # The retry delays will be:
                 # j=0: 6 (2^0) = 6 seconds + jitter
@@ -731,80 +846,32 @@ def encrypt_dataframe_mappartitions(
                     except (json.JSONDecodeError, ValueError) as e:
                         logger2.exception("JSON decode error")
                         raise
-                # For vault server error
-                elif response.status_code in (501, 502, 503):
-                    # 60 seconds between chunks in the same partition
+                # Retryable server errors — exponential backoff with jitter, capped.
+                elif response.status_code in (500, 502, 503, 504):
                     base_delay = 6
+                    max_delay = 96
                     max_retries = 5
-                    # old_traceid = traceid
-                    
+
                     for i in range(max_retries):
-                        # Calculate exponential backoff delay: 6, 12, 24, 48, 96
-                        chunk_delay = base_delay * (2 ** i)
-                        # Add small random component to avoid synchronized calls
+                        # Exponential backoff: 6, 12, 24, 48, 96 (capped at max_delay).
+                        chunk_delay = min(base_delay * (2 ** i), max_delay)
+                        # Add small random component to avoid synchronized calls.
                         jitter = random.uniform(1, 5)
                         total_delay = chunk_delay + jitter
                         logger2.warning(
-                            f"**{sensitive_column}: We have reached API Mesh timeout errors for chunk_id {chunk_id}, retry attempt {i+1}/{max_retries}."
+                            f"**{sensitive_column}: Vault server error {response.status_code} for chunk_id {chunk_id}, "
+                            f"retry attempt {i+1}/{max_retries} in {total_delay:.1f}s"
                         )
-                        
-                        # Apply the delay  
+
                         time.sleep(total_delay)
-                        response = encryption_api(url, current_headers, payload, logger2)
-                    
-                    if response.status_code == 200:
-                        logger2.warning(f"**{sensitive_column}: Retry {i+1}/{max_retries} successful for chunk_id {chunk_id}\n")
-                        try:
-                            response_json = response.json()
-                            
-                            for meta, result in zip(
-                                batch_input_metadata,
-                                response_json["encryptedData"]["data"]["batch_results"]
-                            ):
-                                meta[encrypted_values_col_name] = result
-                                all_results.append(meta)
-                            break
-                        except (json.JSONDecodeError, ValueError) as e:
-                            logger2.exception("JSON decode error")
-                            raise
-                    else:
-                        # If this was the last retry attempt
-                        if i == max_retries - 1:
-                            logger2.error(f"**{sensitive_column}: API call failed with status {response.status_code} for chunk_id {chunk_id} "
-                                          f"after {{max_retries}}")
-                            raise Exception(f"API returned status {response.status_code} for chunk_id {chunk_id} after {max_retries} retries\n")
-                                        
-                        else:
-                            logger2.warning(f"**{sensitive_column}: Retry {i+1}/{max_retries} failed with status {response.status_code} "
-                                            f"for chunk_id {chunk_id}, continuing...")
-                # For client error
-                elif response.status_code in (403, 404, 405):
-                    # 60 seconds between chunks in the same partition
-                    base_delay = 6
-                    max_retries = 5
-                    # old_traceid = traceid
-                    
-                    for i in range(max_retries):
-                        # Calculate exponential backoff delay: 6, 12, 24, 48, 96
-                        chunk_delay = base_delay * (2 ** i)
-                        # Add small random component to avoid synchronized calls
-                        jitter = random.uniform(1, 5)
-                        total_delay = chunk_delay + jitter
-                        logger2.warning(
-                            f"**{sensitive_column}: We have received Vault Transform Engine Rate Limit for chunk_id {{chunk_id}}, retry attempt {{i+1}}/{{max_retries}}."
-                            f"**Will retry again in {chunk_delay + jitter} seconds\n"
-                        )
-                        
-                        # Apply the delay
-                        time.sleep(total_delay)
-                        response = encryption_api(url, current_headers, payload, logger2)
+                        # Re-signed on each attempt: a SigV4 signature is only
+                        # valid for a few minutes and the backoff can exceed that.
+                        response = encryption_api(url, headers, payload, logger2)
 
                         if response.status_code == 200:
-                           logger2.warning(f"***[sensitive_column]: Retry {i+1}/{max_retries} successful for chunk_id {chunk_id}\n")
-
-                           try:
+                            logger2.warning(f"**{sensitive_column}: Retry {i+1}/{max_retries} successful for chunk_id {chunk_id}\n")
+                            try:
                                 response_json = response.json()
-                                
                                 for meta, result in zip(
                                     batch_input_metadata,
                                     response_json["encryptedData"]["data"]["batch_results"]
@@ -812,20 +879,66 @@ def encrypt_dataframe_mappartitions(
                                     meta[encrypted_values_col_name] = result
                                     all_results.append(meta)
                                 break
-                           except (json.JSONDecodeError, ValueError) as e:
+                            except (json.JSONDecodeError, ValueError) as e:
                                 logger2.exception("JSON decode error")
                                 raise
+                        elif i == max_retries - 1:
+                            logger2.error(f"**{sensitive_column}: API call failed with status {response.status_code} for chunk_id {chunk_id} "
+                                          f"after {max_retries} retries")
+                            raise Exception(f"API returned status {response.status_code} for chunk_id {chunk_id} after {max_retries} retries\n")
                         else:
-                            # If this was the last retry attempt
-                            if i == max_retries - 1:
-                                logger2.error(f"***[sensitive_column]: API call failed with status {response.status_code} for chunk {chunk_id} "
-                                              f"after {max_retries} retry attempts")
-                                raise Exception(f"API returned {response.status_code} from partition for chunk_id {chunk_id} after {max_retries} retries\n")
-                            else:
-                                logger2.warning(f"***[sensitive_column]: Retry {i+1}/{max_retries} failed with status {response.status_code} "
-                                f"for chunk_id {chunk_id}, continuing...")
+                            logger2.warning(f"**{sensitive_column}: Retry {i+1}/{max_retries} failed with status {response.status_code} "
+                                            f"for chunk_id {chunk_id}, continuing...")
+                # Retryable client errors (timeout / rate limit) — backoff with jitter, capped.
+                elif response.status_code in (408, 429):
+                    base_delay = 6
+                    max_delay = 96
+                    max_retries = 5
+
+                    for i in range(max_retries):
+                        # Exponential backoff: 6, 12, 24, 48, 96 (capped at max_delay).
+                        chunk_delay = min(base_delay * (2 ** i), max_delay)
+                        # Add small random component to avoid synchronized calls.
+                        jitter = random.uniform(1, 5)
+                        total_delay = chunk_delay + jitter
+                        logger2.warning(
+                            f"**{sensitive_column}: Vault rate limit ({response.status_code}) for chunk_id {chunk_id}, "
+                            f"retry attempt {i+1}/{max_retries} in {total_delay:.1f}s\n"
+                        )
+
+                        time.sleep(total_delay)
+                        # Re-signed on each attempt: a SigV4 signature is only
+                        # valid for a few minutes and the backoff can exceed that.
+                        response = encryption_api(url, headers, payload, logger2)
+
+                        if response.status_code == 200:
+                            logger2.warning(f"**{sensitive_column}: Retry {i+1}/{max_retries} successful for chunk_id {chunk_id}\n")
+                            try:
+                                response_json = response.json()
+                                for meta, result in zip(
+                                    batch_input_metadata,
+                                    response_json["encryptedData"]["data"]["batch_results"]
+                                ):
+                                    meta[encrypted_values_col_name] = result
+                                    all_results.append(meta)
+                                break
+                            except (json.JSONDecodeError, ValueError) as e:
+                                logger2.exception("JSON decode error")
+                                raise
+                        elif i == max_retries - 1:
+                            logger2.error(f"**{sensitive_column}: API call failed with status {response.status_code} for chunk_id {chunk_id} "
+                                          f"after {max_retries} retries")
+                            raise Exception(f"API returned {response.status_code} for chunk_id {chunk_id} after {max_retries} retries\n")
+                        else:
+                            logger2.warning(f"**{sensitive_column}: Retry {i+1}/{max_retries} failed with status {response.status_code} "
+                                            f"for chunk_id {chunk_id}, continuing...")
+                # Non-retryable errors — fail fast. Under AWS_IAM authorization a
+                # 403 means the request was unsigned, signed for the wrong
+                # region, arrived from an unexpected VPC endpoint, or the Glue
+                # role lacks execute-api:Invoke. Retrying will not fix any of
+                # those, so surface the failure.
                 else:
-                    logger2.error(f"***[sensitive_column]: API call failed with status {response.status_code}\n")
+                    logger2.error(f"**{sensitive_column}: API call failed with non-retryable status {response.status_code}\n")
                     raise Exception(f"API returned {response.status_code} for other error codes for chunk_id {chunk_id}\n")
                 
             except Exception as e:

@@ -37,6 +37,7 @@ resource "aws_glue_job" "encryption" {
     "--source_bucket"                    = var.quarantine_bucket_name
     "--metadata_bucket"                  = var.quarantine_bucket_name
     "--transformation"                   = "fpe.card-number"
+    "--chunk_size"                       = tostring(var.encryption_chunk_size)
     "--bin_file_path"                    = "s3://${var.assets_bucket_name}/bin_file/bin-file.csv"
     "--enable-continuous-cloudwatch-log" = "true"
     "--enable-metrics"                   = "true"

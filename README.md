@@ -216,18 +216,90 @@ The Glue job performs sensitive data detection and encryption in these steps:
 
 The Copy Lambda then moves the encrypted file to the landing bucket and cleans up quarantine.
 
-## Handling the Plaintext Window
+## API Authorization
 
-Because encryption happens *inside* the pipeline (application-side) rather than before upload, raw files containing PANs land in the **quarantine bucket in cleartext** and remain there until the Glue job encrypts them and the Copy Lambda moves the result to the landing bucket. In PCI DSS terms, the quarantine bucket is **in-scope Cardholder Data Environment (CDE) storage** for that window. There is no point at which unencrypted PAN data is claimed to "never exist" — instead, the exposure is deliberately bounded and access-controlled:
+The Vault Transform API enforces two independent controls. A request must satisfy both.
 
-- **Bounded persistence (S3 Lifecycle).** The quarantine bucket has a lifecycle rule (`quarantine-layer/s3.tf`) that expires objects after `quarantine_expiration_days` (default: **1 day**) and purges noncurrent versions after `quarantine_noncurrent_expiration_days`. If a run stalls or fails, plaintext cannot linger indefinitely. Incomplete multipart uploads are aborted after 1 day.
-- **Deny-by-default access (S3 Bucket Policy).** A resource policy (`security.tf`) denies `s3:*` to every principal except the pipeline's Glue role and Copy Lambda role, plus a break-glass Ops Admin role. An explicit `Deny` on non-allow-listed principals overrides any identity-based `Allow`, so the CDE bucket cannot be read by anything outside the pipeline.
-- **Least-privilege pipeline roles.** The Glue role may only read source objects and write the `/encrypted` output; the Copy Lambda role may only read the encrypted object and delete the source. Neither has broader bucket access.
-- **Time-bound break-glass access.** The Ops Admin cleanup role (`enc-blog-iam-quarantine-ops-admin-role`) exists solely to remediate orphaned plaintext (e.g. after a stalled run). It is not assumable by default — the trust policy requires an external ID (`ops_admin_external_id`) and caps sessions at `ops_admin_max_session_duration` (default: **1 hour**), so any elevated access is inherently temporary.
-- **TLS enforced in transit.** The bucket policy denies any request where `aws:SecureTransport` is `false`.
-- **Encryption at rest.** Even in quarantine, objects are encrypted with S3 SSE-KMS using the project CMK; public access is fully blocked and versioning is enabled.
+**1. Network boundary — API Gateway resource policy**
 
-Together these controls keep the plaintext window short-lived, tightly scoped, and auditable rather than relying on an (inaccurate) claim that raw data never leaves the client unencrypted.
+The REST API is `PRIVATE` and its resource policy allows `execute-api:Invoke` only when
+`aws:sourceVpce` matches the `execute-api` interface endpoint in the VPC. A second statement
+explicitly denies invocation when `aws:sourceVpce` does not match, so the API cannot be reached
+from the internet or from another VPC even if an identity policy would otherwise allow it.
+
+**2. Identity — AWS_IAM authorization**
+
+`POST /transform/encrypt` is configured with `authorization = "AWS_IAM"`. Every request must be
+SigV4-signed by a principal whose IAM policy allows `execute-api:Invoke` on that method. Being
+inside the VPC is not sufficient: an unsigned request returns `403 Missing Authentication Token`,
+and a signed request from a principal without the permission returns `403`.
+
+The Glue job signs its requests with its own execution role credentials, resolved on each Spark
+executor. See `encryption_api()` in
+`modules/ingestion-layer/assets/glue_encryption/encryption_utils.py`:
+
+```python
+credentials = boto3.Session().get_credentials()
+body = json.dumps(payload)
+aws_request = AWSRequest(method="POST", url=url, data=body, headers=request_headers)
+SigV4Auth(credentials, "execute-api", region).add_auth(aws_request)
+requests.post(url, headers=dict(aws_request.headers), data=body, timeout=60)
+```
+
+The body is serialized once and reused for both signing and sending. SigV4 signs a hash of the
+exact bytes transmitted, so re-serializing (for example by passing `json=payload` to `requests`)
+can invalidate the signature. Each retry re-signs, because a signature expires within minutes and
+the retry backoff can exceed that window.
+
+**The `X-Vault-*` headers are not credentials**
+
+`build_headers()` sends `X-Vault-Request`, `X-Vault-Namespace` and `X-Vault-Token` so the request
+shape matches what a HashiCorp Vault Transform engine expects, which keeps the sample portable to a
+real Vault backend. They carry no authentication:
+
+- The `encryption_api` Lambda never reads or validates them.
+- `X-Vault-Token` holds a placeholder string. A real Vault deployment would resolve it from Secrets
+  Manager at call time rather than holding it in source.
+- API Gateway access logs record only request metadata, not headers, so the placeholder is not
+  written to logs.
+
+Authorization comes solely from the SigV4 signature and the resource policy. Note that botocore
+includes these custom headers in the signed header set
+(`SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-vault-namespace;x-vault-request;x-vault-token`),
+so they are covered by the request's integrity check: an intermediary that rewrites or strips one
+causes a signature mismatch rather than the header being silently ignored.
+
+**Encrypt and decrypt are granted separately**
+
+`POST /transform/encrypt` is the only method this sample exposes. The Glue role's IAM policy is
+scoped to that exact method:
+
+```json
+{
+  "Sid": "InvokeVaultEncryptOnly",
+  "Effect": "Allow",
+  "Action": ["execute-api:Invoke"],
+  "Resource": "${vault_api_execution_arn}/*/POST/transform/encrypt"
+}
+```
+
+Because the resource path includes the method, adding a decrypt endpoint does not implicitly grant
+it to existing callers. A decrypt method would be a distinct API Gateway resource with its own
+resource-policy statement and its own identity policy, granted to a separate role.
+
+**Who can decrypt**
+
+No principal in this sample can reverse FPE through the API, because no decrypt endpoint is
+deployed. The ability to decrypt is equivalent to reading the FPE key material, which is limited
+to two roles:
+
+| Role | Access | Purpose |
+|------|--------|---------|
+| `enc-blog-iam-encryption-api-role` | `secretsmanager:GetSecretValue` on the FPE secret, `kms:Decrypt` on the CMK | Reads key material to perform FF3-1 encryption inside the Lambda |
+| `enc-blog-iam-secret-generator-role` | `secretsmanager:PutSecretValue`, `kms:GenerateDataKey`, `kms:Decrypt` | Seeds and rotates key material |
+
+The Glue role holds neither. Before exposing a decrypt endpoint, decide which principals need
+plaintext access and grant it to those roles only.
 
 ## Treatment Contract
 
@@ -253,6 +325,9 @@ See [TROUBLESHOOT.md](TROUBLESHOOT.md) for common issues and solutions.
 
 - **Event-driven architecture** — loosely coupled services communicating via events
 - **Least privilege IAM** — minimal permissions scoped to each resource
+- **Identity at all layers** — the private API requires both a matching `aws:sourceVpce` and a
+  valid SigV4 signature from a principal allowed to invoke the method; network placement alone
+  grants nothing
 - **Resilience** — service and application-level retries with exponential backoff
 - **PCI DSS scope reduction pattern** — encryption at rest and in transit, audit logging
 - **Network isolation** — all compute in VPC private subnets, no internet access, all AWS calls via VPC endpoints

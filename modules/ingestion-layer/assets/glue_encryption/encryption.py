@@ -165,7 +165,8 @@ if __name__ == "__main__":
             "source_bucket",
             "JOB_NAME",
             "bin_file_path",
-            "vault_api_url"
+            "vault_api_url",
+            "chunk_size"
         ],
     )
 

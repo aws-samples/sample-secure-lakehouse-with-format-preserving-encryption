@@ -52,9 +52,14 @@ variable "lambda_runtime" {
   description = "Lambda runtime version"
 }
 
-variable "lambda_timeout" {
+variable "encryption_lambda_timeout" {
   type        = number
-  description = "Lambda timeout in seconds"
+  description = "Encryption API Lambda timeout in seconds. Must stay strictly below the API Gateway integration timeout so the function fails first."
+}
+
+variable "secret_generator_lambda_timeout" {
+  type        = number
+  description = "Secret generator Lambda timeout in seconds"
 }
 
 variable "lambda_memory_size" {

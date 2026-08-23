@@ -1,11 +1,13 @@
 """One-shot Lambda that seeds AWS Secrets Manager with FPE material.
 
 Generates:
-- tweak:    8 bytes hex-encoded (FF3-1 mandatory tweak length)
-- password: 16 random URL-safe bytes
-- salt:     16 random URL-safe bytes
+- key:   32 random bytes hex-encoded (AES-256 key for FF3-1)
+- tweak: 7 random bytes hex-encoded (FF3-1 56-bit tweak)
 
-Idempotent: if the secret already contains all three keys, it is left untouched
+The key is high-entropy random material generated directly with ``secrets``,
+so no password-based key derivation (PBKDF2) is needed or used.
+
+Idempotent: if the secret already contains both keys, it is left untouched
 unless the invocation event sets ``{"force": true}``.
 """
 
@@ -13,7 +15,6 @@ import json
 import logging
 import os
 import secrets
-import string
 
 import boto3
 from botocore.exceptions import ClientError
@@ -26,19 +27,15 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 _SECRETS_CLIENT = boto3.client("secretsmanager", region_name=AWS_REGION)
 
-_ALPHABET = string.ascii_letters + string.digits
-
-
-def _random_string(length: int) -> str:
-    return "".join(secrets.choice(_ALPHABET) for _ in range(length))
-
 
 def _generate_material() -> dict:
     return {
-        "password": _random_string(16),
-        "salt": _random_string(16),
-        # FF3-1 tweak must be exactly 8 bytes -> 16 hex chars.
-        "tweak": secrets.token_bytes(8).hex(),
+        # AES-256 key, hex-encoded (32 bytes -> 64 hex chars).
+        "key": secrets.token_bytes(32).hex(),
+        # FF3-1 tweak is 56 bits -> 7 bytes -> 14 hex chars
+        # (NIST SP 800-38G Rev. 1). A 64-bit/8-byte tweak selects the
+        # withdrawn FF3 algorithm, not FF3-1.
+        "tweak": secrets.token_bytes(7).hex(),
     }
 
 
@@ -63,7 +60,7 @@ def handler(event, _context):
     """Lambda entry point — generate and store FPE key material."""
     force = bool((event or {}).get("force"))
     existing = _current_secret()
-    required = {"password", "salt", "tweak"}
+    required = {"key", "tweak"}
 
     if not force and required.issubset(existing.keys()):
         LOGGER.info("FPE material already present in %s; skipping.", SECRET_NAME)

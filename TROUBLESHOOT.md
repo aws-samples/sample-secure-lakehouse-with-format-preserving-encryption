@@ -122,3 +122,54 @@ terraform apply -var-file=tfvars/terraform.tfvars
 ```
 
 If that fails, your DNS is the problem — not Terraform. Once connectivity is restored, re-run the same Terraform command.
+## Glue Job Gets 403 from the Vault Transform API
+
+`POST /transform/encrypt` uses `AWS_IAM` authorization, so a 403 is an authorization failure rather
+than a bad path. Work through these in order.
+
+**`{"message":"Missing Authentication Token"}`**
+
+Either the request was not SigV4-signed, or the path is wrong. API Gateway returns this same body
+for both. Confirm the URL ends in `/transform/encrypt` and that the call goes through
+`encryption_api()`, which signs it. A request built with a plain `requests.post(...)` will always
+fail here.
+
+**`{"message":"The security token included in the request is invalid"}` or a signature mismatch**
+
+The signature did not verify. Usual causes:
+
+- Signing region does not match the API region. `encryption_api()` resolves the region from the
+  boto3 session, then `AWS_REGION` / `AWS_DEFAULT_REGION`, then the execute-api hostname. Set
+  `AWS_REGION` on the Glue job if none of those resolve to `us-east-1`.
+- The body was re-serialized after signing. SigV4 hashes the exact bytes sent, so the same string
+  must be passed to `AWSRequest(data=...)` and `requests.post(data=...)`.
+- The `Host` header sent does not match the one signed.
+
+**`{"Message":"User: ... is not authorized to perform: execute-api:Invoke"}`**
+
+The Glue execution role lacks the permission. It is scoped to the exact method:
+
+```json
+"Resource": "${vault_api_execution_arn}/*/POST/transform/encrypt"
+```
+
+Verify the role in use is `enc-blog-iam-glue-execution-role` and that the API execution ARN in the
+policy matches the deployed API.
+
+**403 with no useful body**
+
+The resource policy denied the request because `aws:sourceVpce` did not match. Check that the Glue
+connection is attached to the subnets that route to the `execute-api` interface endpoint, and that
+`execute_api_vpc_endpoint_id` in Terraform matches the deployed endpoint.
+
+**Authorization change did not take effect**
+
+API Gateway serves whatever is in the deployed stage. Changing `authorization` or the resource
+policy requires a new deployment. The `aws_api_gateway_deployment` trigger hash includes
+`aws_api_gateway_method.encrypt_post.authorization` for this reason, since the method's Terraform
+`id` does not change when authorization does. If the stage still behaves the old way, confirm a new
+deployment was created:
+
+```bash
+aws apigateway get-deployments --rest-api-id <api-id>
+```

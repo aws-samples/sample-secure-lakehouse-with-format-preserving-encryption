@@ -12,7 +12,6 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 from ff3 import FF3Cipher
-from passlib.utils.pbkdf2 import pbkdf2
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.INFO)
@@ -50,20 +49,13 @@ def _load_cipher() -> FF3Cipher:
         raise ValueError(f"Secret {SECRET_NAME} has invalid format") from exc
 
     try:
-        password = material["password"]
-        salt = material["salt"]
+        # High-entropy random AES key, hex-encoded. Used directly as the FF3-1
+        # key — no password-based derivation (PBKDF2) is required.
+        key = material["key"]
         tweak = material["tweak"]
     except KeyError as exc:
         LOGGER.error("Invalid secret format — missing key: %s", exc)
         raise ValueError(f"Secret {SECRET_NAME} has invalid format: missing {exc}") from exc
-
-    key = pbkdf2(
-        password.encode("utf-8") if isinstance(password, str) else password,
-        salt.encode("utf-8") if isinstance(salt, str) else salt,
-        1024,
-        keylen=32,
-        prf="hmac-sha512",
-    ).hex()
 
     cipher = FF3Cipher(key, tweak)
     _CIPHER_CACHE["cipher"] = cipher

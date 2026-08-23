@@ -15,7 +15,17 @@ resource "aws_api_gateway_rest_api" "vault" {
 }
 
 # -----------------------------------------------------------------------------
-# Resource Policy — Restrict access to VPC endpoint only
+# Resource Policy — Restrict access to the VPC endpoint only
+#
+# This is the network-boundary half of the control. The identity half is
+# AWS_IAM authorization on the method (below) plus the caller's own IAM policy.
+# Both must pass: the request has to arrive through the expected interface
+# endpoint AND carry a valid SigV4 signature from a principal allowed to invoke
+# the method. Neither one substitutes for the other.
+#
+# The Allow is scoped to the single encrypt method rather than `/*`. A decrypt
+# method, when added, gets its own statement so encrypt and decrypt can be
+# granted independently.
 # -----------------------------------------------------------------------------
 
 resource "aws_api_gateway_rest_api_policy" "vault" {
@@ -25,12 +35,25 @@ resource "aws_api_gateway_rest_api_policy" "vault" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid       = "AllowEncryptFromVpcEndpoint"
         Effect    = "Allow"
+        Principal = "*"
+        Action    = "execute-api:Invoke"
+        Resource  = "${aws_api_gateway_rest_api.vault.execution_arn}/*/POST/transform/encrypt"
+        Condition = {
+          StringEquals = {
+            "aws:sourceVpce" = var.execute_api_vpc_endpoint_id
+          }
+        }
+      },
+      {
+        Sid       = "DenyAnyInvokeOutsideVpcEndpoint"
+        Effect    = "Deny"
         Principal = "*"
         Action    = "execute-api:Invoke"
         Resource  = "${aws_api_gateway_rest_api.vault.execution_arn}/*"
         Condition = {
-          StringEquals = {
+          StringNotEquals = {
             "aws:sourceVpce" = var.execute_api_vpc_endpoint_id
           }
         }
@@ -59,11 +82,14 @@ resource "aws_api_gateway_resource" "encrypt" {
 # Method — POST /transform/encrypt
 # -----------------------------------------------------------------------------
 
+# AWS_IAM requires every request to be SigV4-signed by a principal whose IAM
+# policy allows execute-api:Invoke on this method. Callers that reach the API
+# through the VPC endpoint but cannot sign are rejected with 403.
 resource "aws_api_gateway_method" "encrypt_post" {
   rest_api_id   = aws_api_gateway_rest_api.vault.id
   resource_id   = aws_api_gateway_resource.encrypt.id
   http_method   = "POST"
-  authorization = "NONE"
+  authorization = "AWS_IAM"
 }
 
 # -----------------------------------------------------------------------------
@@ -87,15 +113,26 @@ resource "aws_api_gateway_deployment" "vault" {
   rest_api_id = aws_api_gateway_rest_api.vault.id
 
   depends_on = [
-    aws_api_gateway_integration.encrypt_lambda
+    aws_api_gateway_integration.encrypt_lambda,
+    aws_api_gateway_rest_api_policy.vault
   ]
 
+  # `aws_api_gateway_method.encrypt_post.id` is only
+  # "agm-<rest_api_id>-<resource_id>-<http_method>" (e.g. agm-abc123defg-0xb52i-POST).
+  # It identifies which method this is and contains none of the method's
+  # configuration, so it does not change when the authorization type changes.
+  # `authorization` is hashed explicitly, otherwise flipping NONE -> AWS_IAM
+  # would update the method but never reach the deployed stage.
+  # `execute_api_vpc_endpoint_id` is hashed because resource policy changes also
+  # require a redeployment to take effect.
   triggers = {
     redeployment = sha1(jsonencode([
       aws_api_gateway_resource.transform.id,
       aws_api_gateway_resource.encrypt.id,
       aws_api_gateway_method.encrypt_post.id,
+      aws_api_gateway_method.encrypt_post.authorization,
       aws_api_gateway_integration.encrypt_lambda.id,
+      var.execute_api_vpc_endpoint_id,
     ]))
   }
 

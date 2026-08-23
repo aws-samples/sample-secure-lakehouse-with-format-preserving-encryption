@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Build the shared Lambda layer containing the FF3 encryption libraries
-# (ff3 + passlib). Targets Lambda's runtime platform (x86_64 manylinux).
+# Build the shared Lambda layer containing the FF3 encryption library (ff3).
+# Targets Lambda's runtime platform (x86_64 manylinux).
 #
 # Called automatically by Terraform via terraform_data.build_fpe_layer.
 

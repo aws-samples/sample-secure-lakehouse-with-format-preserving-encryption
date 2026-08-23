@@ -18,12 +18,12 @@
       "Resource": "${assets_bucket_arn}"
     },
     {
-      "Sid": "ExecuteApiInvokeVault",
+      "Sid": "ExecuteApiInvokeVaultEncryptOnly",
       "Effect": "Allow",
       "Action": [
         "execute-api:Invoke"
       ],
-      "Resource": "${api_execution_arn}/*"
+      "Resource": "${api_execution_arn}/*/POST/transform/encrypt"
     }
   ]
 }

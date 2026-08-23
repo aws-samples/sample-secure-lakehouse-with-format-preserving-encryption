@@ -24,9 +24,11 @@ module "common_layer" {
 module "quarantine_layer" {
   source = "./modules/quarantine-layer"
 
-  quarantine_bucket_name = var.quarantine_bucket_name
-  kms_key_arn            = module.common_layer.kms_key_arn
-  upload_prefix          = var.event_object_key_prefix
+  quarantine_bucket_name     = var.quarantine_bucket_name
+  kms_key_arn                = module.common_layer.kms_key_arn
+  upload_prefix              = var.event_object_key_prefix
+  expiration_days            = var.quarantine_expiration_days
+  noncurrent_expiration_days = var.quarantine_noncurrent_expiration_days
 }
 
 # -----------------------------------------------------------------------------
@@ -153,4 +155,13 @@ module "orchestration_layer" {
   log_group_arn               = module.common_layer.log_group_arn
   state_machine_name          = var.state_machine_name
   cloudwatch_write_policy_arn = module.common_layer.cloudwatch_write_policy_arn
+  sns_topic_name              = var.sns_topic_name
+  kms_key_arn                 = module.common_layer.kms_key_arn
+  notification_email          = var.notification_email
+  private_subnet_ids          = module.common_layer.private_subnet_ids
+  lambda_security_group_id    = module.common_layer.lambda_security_group_id
+  notify_lambda_name          = var.notify_lambda_name
+  notify_lambda_runtime       = var.notify_lambda_runtime
+  notify_lambda_timeout       = var.notify_lambda_timeout
+  notify_lambda_memory_size   = var.notify_lambda_memory_size
 }

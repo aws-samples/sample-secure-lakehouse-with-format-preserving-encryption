@@ -1,6 +1,8 @@
 # AWS Encryption Blog Sample
 
-A Terraform-based infrastructure project demonstrating a pattern that can support PCI DSS scope reduction using client-side Format-Preserving Encryption (FPE) with AWS Glue and an event-driven pipeline.
+A Terraform-based infrastructure project demonstrating a pattern that can support PCI DSS scope reduction by applying **application-side Format-Preserving Encryption (FPE)** — encrypting sensitive values inside an AWS Glue job *before* the data reaches the Lakehouse raw zone — with an event-driven pipeline.
+
+> **Terminology note:** This solution uses *application-side* FPE, not AWS "client-side encryption" (as in the AWS Encryption SDK / S3 client-side encryption, where the client encrypts before data reaches AWS storage). Here, raw files land in the quarantine bucket in cleartext and are encrypted server-side within the pipeline. See [Handling the Plaintext Window](#handling-the-plaintext-window) for how that transient cleartext exposure is controlled.
 
 > **Disclaimer**: This is sample code accompanying an AWS blog post. It is provided for educational
 > purposes only. Do not deploy to production without the additional hardening listed in
@@ -18,6 +20,8 @@ AWS does not natively support Format-Preserving Encryption for PCI data ingestio
 - Detects sensitive PCI data (credit card numbers, etc.) using Luhn algorithm, BIN lookup, and regex patterns
 - Encrypts sensitive fields using Format-Preserving Encryption (FPE) while maintaining data format
 - Moves encrypted data to a landing (raw) bucket for downstream Lakehouse consumption
+
+Sensitive values are encrypted within the AWS Glue job before landing in the Lakehouse raw zone; downstream analytics consumers only ever see protected values. The resulting objects in the landing bucket are additionally protected with S3 SSE-KMS for data at rest.
 
 ## Architecture
 
@@ -130,7 +134,7 @@ You should see `{"status": "ok", "secretName": "enc-blog-sm-fpe-key-material-sec
 To rotate/regenerate the FPE key material:
 
 ```bash
-aws lambda invoke --function-name enc-blog-lambda-secret-generator-function --payload '{"force": true}' /tmp/seed-output.json && cat /tmp/seed-output.json
+aws lambda invoke --function-name enc-blog-lambda-secret-generator-function --cli-binary-format raw-in-base64-out --payload '{"force": true}' /tmp/seed-output.json && cat /tmp/seed-output.json
 ```
 
 ### 7. Test the Pipeline
@@ -211,6 +215,19 @@ The Glue job performs sensitive data detection and encryption in these steps:
 6. **Write** — Outputs the encrypted CSV (bz2 compressed) to quarantine under `/encrypted` suffix
 
 The Copy Lambda then moves the encrypted file to the landing bucket and cleans up quarantine.
+
+## Handling the Plaintext Window
+
+Because encryption happens *inside* the pipeline (application-side) rather than before upload, raw files containing PANs land in the **quarantine bucket in cleartext** and remain there until the Glue job encrypts them and the Copy Lambda moves the result to the landing bucket. In PCI DSS terms, the quarantine bucket is **in-scope Cardholder Data Environment (CDE) storage** for that window. There is no point at which unencrypted PAN data is claimed to "never exist" — instead, the exposure is deliberately bounded and access-controlled:
+
+- **Bounded persistence (S3 Lifecycle).** The quarantine bucket has a lifecycle rule (`quarantine-layer/s3.tf`) that expires objects after `quarantine_expiration_days` (default: **1 day**) and purges noncurrent versions after `quarantine_noncurrent_expiration_days`. If a run stalls or fails, plaintext cannot linger indefinitely. Incomplete multipart uploads are aborted after 1 day.
+- **Deny-by-default access (S3 Bucket Policy).** A resource policy (`security.tf`) denies `s3:*` to every principal except the pipeline's Glue role and Copy Lambda role, plus a break-glass Ops Admin role. An explicit `Deny` on non-allow-listed principals overrides any identity-based `Allow`, so the CDE bucket cannot be read by anything outside the pipeline.
+- **Least-privilege pipeline roles.** The Glue role may only read source objects and write the `/encrypted` output; the Copy Lambda role may only read the encrypted object and delete the source. Neither has broader bucket access.
+- **Time-bound break-glass access.** The Ops Admin cleanup role (`enc-blog-iam-quarantine-ops-admin-role`) exists solely to remediate orphaned plaintext (e.g. after a stalled run). It is not assumable by default — the trust policy requires an external ID (`ops_admin_external_id`) and caps sessions at `ops_admin_max_session_duration` (default: **1 hour**), so any elevated access is inherently temporary.
+- **TLS enforced in transit.** The bucket policy denies any request where `aws:SecureTransport` is `false`.
+- **Encryption at rest.** Even in quarantine, objects are encrypted with S3 SSE-KMS using the project CMK; public access is fully blocked and versioning is enabled.
+
+Together these controls keep the plaintext window short-lived, tightly scoped, and auditable rather than relying on an (inaccurate) claim that raw data never leaves the client unencrypted.
 
 ## Treatment Contract
 
@@ -300,7 +317,7 @@ All resources follow the pattern `enc-blog-<service>-<use-case>-<resource-type>`
 
 ## Conclusion
 
-This project demonstrates how Format-Preserving Encryption can be used to keep cardholder data out of downstream Lakehouse storage, using an event-driven, fully serverless architecture on AWS. The solution addresses a real compliance gap — encrypting PCI data while maintaining its format for downstream consumption — without requiring any internet access or exposing data outside the VPC.
+This project demonstrates how application-side Format-Preserving Encryption can keep cardholder data out of **downstream Lakehouse storage**, using an event-driven, fully serverless architecture on AWS. The solution addresses a real compliance gap — encrypting PCI data while maintaining its format for downstream consumption — with all processing running inside the VPC and no internet access. Raw data does transit a short-lived quarantine (CDE) window before encryption; that window is bounded by S3 lifecycle expiry and locked down with a deny-by-default bucket policy, as described in [Handling the Plaintext Window](#handling-the-plaintext-window).
 
 The modular Terraform design makes it straightforward to adapt for other sensitive data types, add new datasets via treatment contracts, or integrate with existing data lake architectures.
 

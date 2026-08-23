@@ -21,3 +21,8 @@ output "copy_lambda_function_name" {
   description = "Function name of the Copy Lambda"
   value       = aws_lambda_function.copy.function_name
 }
+
+output "copy_lambda_role_arn" {
+  description = "ARN of the Copy Lambda execution role"
+  value       = aws_iam_role.copy_lambda.arn
+}

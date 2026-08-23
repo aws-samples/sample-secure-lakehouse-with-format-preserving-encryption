@@ -10,6 +10,7 @@ locals {
     "glue",
     "sts",
     "sqs",
-    "states"
+    "states",
+    "sns"
   ]
 }

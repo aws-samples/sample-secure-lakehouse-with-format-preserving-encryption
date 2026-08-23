@@ -55,6 +55,30 @@ variable "quarantine_bucket_name" {
   description = "Name of the S3 quarantine bucket where raw files are deposited for processing"
 }
 
+variable "quarantine_expiration_days" {
+  type        = number
+  description = "Days after creation before objects in the quarantine bucket expire, bounding the plaintext-persistence window"
+}
+
+variable "quarantine_noncurrent_expiration_days" {
+  type        = number
+  description = "Days before noncurrent object versions in the quarantine bucket are permanently deleted"
+}
+
+# -----------------------------------------------------------------------------
+# Quarantine Ops Admin (break-glass cleanup) Role
+# -----------------------------------------------------------------------------
+
+variable "ops_admin_external_id" {
+  type        = string
+  description = "External ID required to assume the quarantine Ops Admin cleanup role"
+}
+
+variable "ops_admin_max_session_duration" {
+  type        = number
+  description = "Maximum session duration in seconds for the quarantine Ops Admin role (time-bound access)"
+}
+
 # -----------------------------------------------------------------------------
 # Landing Layer
 # -----------------------------------------------------------------------------
@@ -124,6 +148,36 @@ variable "lambda_trigger_memory_size" {
 variable "state_machine_name" {
   type        = string
   description = "Name of the Step Functions state machine that orchestrates the pipeline"
+}
+
+variable "sns_topic_name" {
+  type        = string
+  description = "Name of the SNS topic for pipeline failure notifications"
+}
+
+variable "notification_email" {
+  type        = string
+  description = "Email address to receive pipeline failure notifications"
+}
+
+variable "notify_lambda_name" {
+  type        = string
+  description = "Name of the notification formatter Lambda function"
+}
+
+variable "notify_lambda_runtime" {
+  type        = string
+  description = "Runtime identifier for the notification Lambda (e.g. python3.12)"
+}
+
+variable "notify_lambda_timeout" {
+  type        = number
+  description = "Timeout in seconds for the notification Lambda"
+}
+
+variable "notify_lambda_memory_size" {
+  type        = number
+  description = "Memory allocation in MB for the notification Lambda"
 }
 
 # -----------------------------------------------------------------------------

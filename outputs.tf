@@ -142,3 +142,12 @@ output "cloudwatch_write_policy_arn" {
   description = "ARN of the shared CloudWatch write policy"
   value       = module.common_layer.cloudwatch_write_policy_arn
 }
+
+# -----------------------------------------------------------------------------
+# Monitoring — CloudWatch Alarms
+# -----------------------------------------------------------------------------
+
+output "monitoring_alarm_names" {
+  description = "Names of all CloudWatch metric alarms guarding the pipeline"
+  value       = module.monitoring_layer.alarm_names
+}

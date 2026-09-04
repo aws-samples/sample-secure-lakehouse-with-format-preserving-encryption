@@ -167,3 +167,47 @@ module "orchestration_layer" {
   notify_lambda_timeout       = var.notify_lambda_timeout
   notify_lambda_memory_size   = var.notify_lambda_memory_size
 }
+
+# -----------------------------------------------------------------------------
+# Monitoring Layer — CloudWatch alarms across all pipeline stages
+# Depends on Ingestion (DLQ/Glue/trigger), Orchestration (SNS + state machine),
+# Landing (copy Lambda) and Vault Transform (API + encryption Lambda).
+# -----------------------------------------------------------------------------
+
+module "monitoring_layer" {
+  source = "./modules/monitoring-layer"
+
+  project_name = var.project_name
+
+  # Alarms notify on the same SNS topic used for pipeline outcome emails.
+  sns_topic_arn = module.orchestration_layer.sns_topic_arn
+
+  # Resource identifiers used as alarm dimensions.
+  dlq_name                   = module.ingestion_layer.dlq_name
+  state_machine_arn          = module.orchestration_layer.state_machine_arn
+  glue_job_name              = module.ingestion_layer.glue_job_name
+  encryption_api_lambda_name = module.vault_transform_service.encryption_api_lambda_name
+  copy_lambda_name           = var.copy_lambda_name
+  lambda_trigger_name        = var.lambda_trigger_name
+  api_gateway_name           = module.vault_transform_service.api_gateway_name
+  api_gateway_stage_name     = module.vault_transform_service.api_gateway_stage_name
+
+  # Thresholds / evaluation configuration.
+  alarm_period_seconds                    = var.alarm_period_seconds
+  alarm_evaluation_periods                = var.alarm_evaluation_periods
+  dlq_depth_threshold                     = var.dlq_depth_threshold
+  sfn_failed_threshold                    = var.sfn_failed_threshold
+  glue_failed_threshold                   = var.glue_failed_threshold
+  lambda_error_threshold                  = var.lambda_error_threshold
+  lambda_throttle_threshold               = var.lambda_throttle_threshold
+  encryption_lambda_duration_threshold_ms = var.encryption_lambda_duration_threshold_ms
+  apigw_5xx_threshold                     = var.apigw_5xx_threshold
+  apigw_latency_threshold_ms              = var.apigw_latency_threshold_ms
+
+  depends_on = [
+    module.ingestion_layer,
+    module.orchestration_layer,
+    module.landing_layer,
+    module.vault_transform_service,
+  ]
+}

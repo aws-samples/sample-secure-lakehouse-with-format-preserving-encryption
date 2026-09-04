@@ -137,3 +137,27 @@ packager_artifacts_prefix   = "artifacts"
 # the local file re-uploads it on the next apply (etag = filemd5).
 packager_bin_file_path   = "modules/ingestion-layer/assets/data/bin-file.csv"
 packager_bin_file_prefix = "bin_file"
+
+# -----------------------------------------------------------------------------
+# Monitoring Layer — CloudWatch Alarms
+# -----------------------------------------------------------------------------
+
+# Common evaluation window: 5-minute periods, single period to breach.
+alarm_period_seconds     = 300
+alarm_evaluation_periods = 1
+
+# Any parked event in the DLQ, any failed workflow/Glue task, and any Lambda
+# error or throttle is worth a notification in this pipeline.
+dlq_depth_threshold       = 1
+sfn_failed_threshold      = 1
+glue_failed_threshold     = 1
+lambda_error_threshold    = 1
+lambda_throttle_threshold = 1
+
+# Encryption API Lambda duration: warn well before the 28s Lambda timeout / 29s
+# API Gateway integration timeout (25s = 25000 ms).
+encryption_lambda_duration_threshold_ms = 25000
+
+# Vault API: any 5XX is notable; average latency budget 10s (10000 ms).
+apigw_5xx_threshold        = 1
+apigw_latency_threshold_ms = 10000

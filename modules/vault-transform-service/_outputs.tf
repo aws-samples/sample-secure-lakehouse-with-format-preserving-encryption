@@ -21,3 +21,18 @@ output "api_execution_arn" {
   description = "Execution ARN of the vault REST API (for IAM scoping in ingestion layer)"
   value       = aws_api_gateway_rest_api.vault.execution_arn
 }
+
+output "encryption_api_lambda_name" {
+  description = "Function name of the encryption API Lambda (for CloudWatch alarm dimensions)"
+  value       = aws_lambda_function.encryption_api.function_name
+}
+
+output "api_gateway_name" {
+  description = "Name of the vault REST API (for CloudWatch ApiGateway alarm dimensions)"
+  value       = aws_api_gateway_rest_api.vault.name
+}
+
+output "api_gateway_stage_name" {
+  description = "Deployed stage name of the vault REST API (for CloudWatch ApiGateway alarm dimensions)"
+  value       = aws_api_gateway_stage.prod.stage_name
+}

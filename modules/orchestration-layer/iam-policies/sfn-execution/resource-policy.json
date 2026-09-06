@@ -10,6 +10,14 @@
       "Resource": "${copy_lambda_arn}"
     },
     {
+      "Sid": "InvokeNotifyLambda",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": "${notify_lambda_arn}"
+    },
+    {
       "Sid": "GlueJobExecution",
       "Effect": "Allow",
       "Action": [

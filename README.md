@@ -1,6 +1,8 @@
 # AWS Encryption Blog Sample
 
-A Terraform-based infrastructure project demonstrating a pattern that can support PCI DSS scope reduction using client-side Format-Preserving Encryption (FPE) with AWS Glue and an event-driven pipeline.
+A Terraform-based infrastructure project demonstrating a pattern that can support PCI DSS scope reduction by applying **application-side Format-Preserving Encryption (FPE)** — encrypting sensitive values inside an AWS Glue job *before* the data reaches the Lakehouse raw zone — with an event-driven pipeline.
+
+> **Terminology note:** This solution uses *application-side* FPE, not AWS "client-side encryption" (as in the AWS Encryption SDK / S3 client-side encryption, where the client encrypts before data reaches AWS storage). Here, raw files land in the quarantine bucket in cleartext and are encrypted server-side within the pipeline. See [Handling the Plaintext Window](#handling-the-plaintext-window) for how that transient cleartext exposure is controlled.
 
 > **Disclaimer**: This is sample code accompanying an AWS blog post. It is provided for educational
 > purposes only. Do not deploy to production without the additional hardening listed in
@@ -18,6 +20,8 @@ AWS does not natively support Format-Preserving Encryption for PCI data ingestio
 - Detects sensitive PCI data (credit card numbers, etc.) using Luhn algorithm, BIN lookup, and regex patterns
 - Encrypts sensitive fields using Format-Preserving Encryption (FPE) while maintaining data format
 - Moves encrypted data to a landing (raw) bucket for downstream Lakehouse consumption
+
+Sensitive values are encrypted within the AWS Glue job before landing in the Lakehouse raw zone; downstream analytics consumers only ever see protected values. The resulting objects in the landing bucket are additionally protected with S3 SSE-KMS for data at rest.
 
 ## Architecture
 
@@ -130,7 +134,7 @@ You should see `{"status": "ok", "secretName": "enc-blog-sm-fpe-key-material-sec
 To rotate/regenerate the FPE key material:
 
 ```bash
-aws lambda invoke --function-name enc-blog-lambda-secret-generator-function --payload '{"force": true}' /tmp/seed-output.json && cat /tmp/seed-output.json
+aws lambda invoke --function-name enc-blog-lambda-secret-generator-function --cli-binary-format raw-in-base64-out --payload '{"force": true}' /tmp/seed-output.json && cat /tmp/seed-output.json
 ```
 
 ### 7. Test the Pipeline
@@ -388,7 +392,7 @@ All resources follow the pattern `enc-blog-<service>-<use-case>-<resource-type>`
 
 ## Conclusion
 
-This project demonstrates how Format-Preserving Encryption can be used to keep cardholder data out of downstream Lakehouse storage, using an event-driven, fully serverless architecture on AWS. The solution addresses a real compliance gap — encrypting PCI data while maintaining its format for downstream consumption — without requiring any internet access or exposing data outside the VPC.
+This project demonstrates how application-side Format-Preserving Encryption can keep cardholder data out of **downstream Lakehouse storage**, using an event-driven, fully serverless architecture on AWS. The solution addresses a real compliance gap — encrypting PCI data while maintaining its format for downstream consumption — with all processing running inside the VPC and no internet access. Raw data does transit a short-lived quarantine (CDE) window before encryption; that window is bounded by S3 lifecycle expiry and locked down with a deny-by-default bucket policy, as described in [Handling the Plaintext Window](#handling-the-plaintext-window).
 
 The modular Terraform design makes it straightforward to adapt for other sensitive data types, add new datasets via treatment contracts, or integrate with existing data lake architectures.
 

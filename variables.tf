@@ -55,6 +55,30 @@ variable "quarantine_bucket_name" {
   description = "Name of the S3 quarantine bucket where raw files are deposited for processing"
 }
 
+variable "quarantine_expiration_days" {
+  type        = number
+  description = "Days after creation before objects in the quarantine bucket expire, bounding the plaintext-persistence window"
+}
+
+variable "quarantine_noncurrent_expiration_days" {
+  type        = number
+  description = "Days before noncurrent object versions in the quarantine bucket are permanently deleted"
+}
+
+# -----------------------------------------------------------------------------
+# Quarantine Ops Admin (break-glass cleanup) Role
+# -----------------------------------------------------------------------------
+
+variable "ops_admin_external_id" {
+  type        = string
+  description = "External ID required to assume the quarantine Ops Admin cleanup role"
+}
+
+variable "ops_admin_max_session_duration" {
+  type        = number
+  description = "Maximum session duration in seconds for the quarantine Ops Admin role (time-bound access)"
+}
+
 # -----------------------------------------------------------------------------
 # Landing Layer
 # -----------------------------------------------------------------------------
@@ -124,6 +148,36 @@ variable "lambda_trigger_memory_size" {
 variable "state_machine_name" {
   type        = string
   description = "Name of the Step Functions state machine that orchestrates the pipeline"
+}
+
+variable "sns_topic_name" {
+  type        = string
+  description = "Name of the SNS topic for pipeline failure notifications"
+}
+
+variable "notification_email" {
+  type        = string
+  description = "Email address to receive pipeline failure notifications"
+}
+
+variable "notify_lambda_name" {
+  type        = string
+  description = "Name of the notification formatter Lambda function"
+}
+
+variable "notify_lambda_runtime" {
+  type        = string
+  description = "Runtime identifier for the notification Lambda (e.g. python3.12)"
+}
+
+variable "notify_lambda_timeout" {
+  type        = number
+  description = "Timeout in seconds for the notification Lambda"
+}
+
+variable "notify_lambda_memory_size" {
+  type        = number
+  description = "Memory allocation in MB for the notification Lambda"
 }
 
 # -----------------------------------------------------------------------------
@@ -240,4 +294,58 @@ variable "packager_bin_file_path" {
 variable "packager_bin_file_prefix" {
   type        = string
   description = "S3 key prefix under which the BIN file is uploaded in the assets bucket"
+}
+
+# -----------------------------------------------------------------------------
+# Monitoring Layer — CloudWatch Alarms
+# -----------------------------------------------------------------------------
+
+variable "alarm_period_seconds" {
+  type        = number
+  description = "Evaluation period in seconds for CloudWatch metric alarms"
+}
+
+variable "alarm_evaluation_periods" {
+  type        = number
+  description = "Number of periods evaluated before a CloudWatch alarm changes state"
+}
+
+variable "dlq_depth_threshold" {
+  type        = number
+  description = "Alarm when the SQS DLQ has at least this many visible messages"
+}
+
+variable "sfn_failed_threshold" {
+  type        = number
+  description = "Alarm when Step Functions failed executions reach this value in a period"
+}
+
+variable "glue_failed_threshold" {
+  type        = number
+  description = "Alarm when Glue failed tasks reach this value in a period"
+}
+
+variable "lambda_error_threshold" {
+  type        = number
+  description = "Alarm when a Lambda reports at least this many errors in a period"
+}
+
+variable "lambda_throttle_threshold" {
+  type        = number
+  description = "Alarm when a Lambda reports at least this many throttles in a period"
+}
+
+variable "encryption_lambda_duration_threshold_ms" {
+  type        = number
+  description = "Alarm when the encryption API Lambda average duration (ms) exceeds this value. Keep below the API Gateway 29s integration timeout."
+}
+
+variable "apigw_5xx_threshold" {
+  type        = number
+  description = "Alarm when the vault API reports at least this many 5XX responses in a period"
+}
+
+variable "apigw_latency_threshold_ms" {
+  type        = number
+  description = "Alarm when the vault API average latency (ms) exceeds this value"
 }

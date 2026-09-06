@@ -27,11 +27,25 @@ resource "aws_sfn_state_machine" "pipeline" {
           }
         }
         ResultPath = "$.glue_result"
-        Retry      = []
+        Retry = [
+          {
+            # Only retry transient Glue failures. Permanent errors (bad script,
+            # missing dependency archive, IAM) fall straight through to Catch.
+            ErrorEquals = [
+              "Glue.ConcurrentRunsExceededException",
+              "Glue.OperationTimeoutException",
+              "States.TaskFailed"
+            ]
+            IntervalSeconds = 10
+            MaxAttempts     = 3
+            BackoffRate     = 2.0
+          }
+        ]
         Catch = [
           {
             ErrorEquals = ["States.ALL"]
-            Next        = "FailState"
+            ResultPath  = "$.error_info"
+            Next        = "NotifyFailure"
           }
         ]
         Next = "InvokeCopyLambda"
@@ -46,12 +60,65 @@ resource "aws_sfn_state_machine" "pipeline" {
             "source_key.$"    = "$.source_key"
           }
         }
-        End = true
+        ResultPath = "$.copy_result"
+        Retry = [
+          {
+            ErrorEquals     = ["States.ALL"]
+            IntervalSeconds = 5
+            MaxAttempts     = 3
+            BackoffRate     = 2.0
+          }
+        ]
+        Catch = [
+          {
+            ErrorEquals = ["States.ALL"]
+            ResultPath  = "$.error_info"
+            Next        = "NotifyFailure"
+          }
+        ]
+        Next = "NotifySuccess"
+      }
+      NotifySuccess = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = aws_lambda_function.notify.arn
+          Payload = {
+            "status"           = "SUCCESS"
+            "source_bucket.$"  = "$.source_bucket"
+            "source_key.$"     = "$.source_key"
+            "execution_name.$" = "$$.Execution.Name"
+            "execution_id.$"   = "$$.Execution.Id"
+            "start_time.$"     = "$$.Execution.StartTime"
+            "state_machine.$"  = "$$.StateMachine.Name"
+          }
+        }
+        ResultPath = "$.notify_result"
+        End        = true
+      }
+      NotifyFailure = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = aws_lambda_function.notify.arn
+          Payload = {
+            "status"           = "FAILED"
+            "source_bucket.$"  = "$.source_bucket"
+            "source_key.$"     = "$.source_key"
+            "execution_name.$" = "$$.Execution.Name"
+            "execution_id.$"   = "$$.Execution.Id"
+            "start_time.$"     = "$$.Execution.StartTime"
+            "state_machine.$"  = "$$.StateMachine.Name"
+            "error_info.$"     = "$.error_info"
+          }
+        }
+        ResultPath = "$.notify_result"
+        Next       = "FailState"
       }
       FailState = {
         Type  = "Fail"
-        Error = "GlueJobFailed"
-        Cause = "The Glue encryption job failed after retries"
+        Error = "PipelineFailed"
+        Cause = "The pipeline failed after retries — see SNS notification for details"
       }
     }
   })

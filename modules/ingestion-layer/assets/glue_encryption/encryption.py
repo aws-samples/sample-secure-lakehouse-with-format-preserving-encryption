@@ -129,7 +129,6 @@ def process_file(args, spark: SparkSession, logger2):
         "ignoreTrailingWhiteSpace": False,
     }
     df = spark.read.options(**file_options).csv(source_file)
-    df.show(20,truncate=False)
 
     processing_sensitive_columns(args, spark, logger2, df, sensitive_columns)
 

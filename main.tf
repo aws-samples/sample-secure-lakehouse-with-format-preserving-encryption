@@ -26,7 +26,6 @@ module "quarantine_layer" {
 
   quarantine_bucket_name     = var.quarantine_bucket_name
   kms_key_arn                = module.common_layer.kms_key_arn
-  upload_prefix              = var.event_object_key_prefix
   expiration_days            = var.quarantine_expiration_days
   noncurrent_expiration_days = var.quarantine_noncurrent_expiration_days
 }
@@ -139,6 +138,7 @@ module "ingestion_layer" {
   glue_timeout                = var.glue_timeout
   glue_max_retries            = var.glue_max_retries
   encryption_chunk_size       = var.encryption_chunk_size
+  dataset                     = var.dataset
 
   depends_on = [module.packager_layer]
 }

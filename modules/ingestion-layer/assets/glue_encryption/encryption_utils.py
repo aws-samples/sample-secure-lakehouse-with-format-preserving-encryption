@@ -22,7 +22,7 @@ from pyspark.sql.functions import (
 
 from pyspark.sql import functions as F
 
-from pyspark import TaskContext
+from pyspark import StorageLevel, TaskContext
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.window import Window
 from pyspark.sql.types import (
@@ -49,6 +49,7 @@ from botocore.awsrequest import AWSRequest
 from typing import List, Dict, Any
 from urllib.parse import urlparse
 import random
+import re
 
 # The Vault Transform API method uses AWS_IAM authorization, so every request
 # must be SigV4-signed with credentials whose IAM policy allows
@@ -285,8 +286,75 @@ def build_headers() -> dict:
     }
 
 
+class UnlistedColumnsError(Exception):
+    """The input file has columns the treatment contract does not list."""
+
+
+def _loggable_column_name(name: str, max_len: int = 64) -> str:
+    """Make a column name safe to put in a log line or a failure notification.
+
+    A file with no header row makes Spark take its first data row as the column
+    names, so a "name" can be a card number or a whole statement. The error
+    below is logged and reaches the SNS failure notification, so it must not
+    carry that. Digits are masked once a name holds 8 or more of them (a card
+    number is at least 12), and long names are cut.
+    """
+    if sum(ch.isdigit() for ch in name) >= 8:
+        name = re.sub(r"\d", "#", name)
+    return name if len(name) <= max_len else name[:max_len] + "..."
+
+
+def require_columns_listed_in_contract(
+    columns: list, sensitive_columns: list, logger2, max_listed: int = 20
+) -> None:
+    """Fail when the input has columns the treatment contract does not list.
+
+    Only the columns the contract lists are scanned and encrypted. Every other
+    column is copied to the output as it arrived, so a column added to the file
+    later, holding card numbers, would be written out in plaintext with no error.
+    Refusing the file turns that silent leak into a failed run.
+
+    Names are compared case-insensitively, as Spark resolves them. The contract
+    is the single list of columns to scan, so listing a column there is how it
+    is brought under treatment, and it will then be scanned for card numbers.
+
+    Raises:
+        UnlistedColumnsError: listing the position and name of each column that
+            is not in the contract. Values are never included.
+    """
+    listed = {(c.get("fieldName") or "").lower() for c in sensitive_columns}
+    unlisted = [
+        (position, name)
+        for position, name in enumerate(columns)
+        if name.lower() not in listed
+    ]
+    if not unlisted:
+        return
+
+    shown = ", ".join(
+        f"#{position}: {_loggable_column_name(name)!r}"
+        for position, name in unlisted[:max_listed]
+    )
+    more = len(unlisted) - max_listed
+    if more > 0:
+        shown += f", and {more} more"
+
+    message = (
+        f"The input has {len(unlisted)} of {len(columns)} column(s) that the "
+        f"treatment contract does not list, so they would not be encrypted "
+        f"(0-based position: name): {shown}. List each one in the contract, "
+        f"where it will then be scanned for card numbers, or remove it from the "
+        f"file."
+    )
+    logger2.error(message)
+    raise UnlistedColumnsError(message)
+
+
 def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: DataFrame, sensitive_columns: list):
     logger2.info("===============")
+
+    # Before anything is scanned or sent to the encryption API.
+    require_columns_listed_in_contract(input_df.columns, sensitive_columns, logger2)
 
     df_row_ids = add_row_indexes(input_df)
     logger2.info("=================")
@@ -294,6 +362,11 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
     logger2.info("Added row indexes.")
 
     df_reconstructed = df_row_ids
+
+    # Encrypted results for every column stay persisted until the output is
+    # written: the write is the action that consumes them, and releasing one
+    # sooner makes Spark re-call the encryption API to rebuild it.
+    persisted_encrypted_dfs = []
 
     for sensitive in sensitive_columns:
         sensitive_column = sensitive.get("fieldName")
@@ -359,7 +432,7 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
             datasource = args["datasource"]
 
             start = datetime.now()
-            df_encrypted_advanced = encrypt_dataframe_mappartitions(
+            df_encrypted_advanced, encrypted_cache = encrypt_dataframe_mappartitions(
                 args,
                 logger2,
                 spark,
@@ -372,6 +445,7 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
                 datasource,
                 sensitive_column
             )
+            persisted_encrypted_dfs.append(encrypted_cache)
             end = datetime.now()
             logger2.info(f"**Encryption process took: {end - start}")
             logger2.info("FINAL ENCRYPTED DF:")
@@ -421,6 +495,10 @@ def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: D
     logger2.info("File is copied to S3 using Spark Native Writer")
     end = datetime.now()
     logger2.info(f"**Spark Transformation and File is written to S3 process took: {end - start}")
+
+    # Safe to release now: nothing after the write reads the encrypted results.
+    for cached_df in persisted_encrypted_dfs:
+        cached_df.unpersist()
 
 
 def add_row_indexes(
@@ -473,6 +551,14 @@ def detect_sensitive_data(args, spark: SparkSession, df: DataFrame, column_to_ch
     bin_lookup = load_bins_from_s3(bin_path, logger2)
     bc_bin_set = spark.sparkContext.broadcast(bin_lookup)
 
+    # The BIN file holds prefixes of mixed length (e.g. 4, 5 and 6 digits), so a
+    # card must be tested against every prefix length present rather than a fixed
+    # 6-digit slice. Derived once here and broadcast so the per-card check in
+    # bin_validation does not recompute it for every candidate on every executor.
+    bin_prefix_lengths = {len(b) for b in bin_lookup}
+    logger2.info(f"BIN prefix lengths present in the BIN file: {sorted(bin_prefix_lengths)}")
+    bc_bin_prefix_lengths = spark.sparkContext.broadcast(bin_prefix_lengths)
+
     initial_df = df.select(column_to_check, "enc_row_index")
     final_df = initial_df.withColumn("orig_text", col(column_to_check))
     
@@ -509,7 +595,14 @@ def detect_sensitive_data(args, spark: SparkSession, df: DataFrame, column_to_ch
         result = []
         for card in card_list:
             try:
-                result.append(bin_validation(card, logger2, bc_bin_set.value))
+                result.append(
+                    bin_validation(
+                        card,
+                        logger2,
+                        bc_bin_set.value,
+                        bc_bin_prefix_lengths.value,
+                    )
+                )
             except (ValueError, TypeError):
                 result.append(False)
         return result
@@ -620,12 +713,64 @@ def load_bins_from_s3(bin_path, logger2):
 
 
 
-def bin_validation(card_number: str, logger2, bin_set: set) -> bool:
+# Separators the detection regex tolerates inside a card number. Kept as one
+# definition so stripping and re-applying a layout can never disagree about what
+# counts as a separator.
+SEPARATOR_PATTERN = re.compile(r"[\s\-\._]")
+
+
+def strip_separators(value: str) -> str:
+    """Remove separators, leaving digits only.
+
+    FF3-1 encrypts over a fixed alphabet (radix 10 here, "0123456789"), so a
+    value still carrying separators raises ValueError in the cipher and the
+    encryption API answers 400.
+
+        "2253-4424-0625-9428" -> "2253442406259428"
     """
-    Analyze text using Regex.
+    return SEPARATOR_PATTERN.sub("", value)
+
+
+def reapply_separator_layout(template: str, digits: str) -> str:
+    """Place `digits` back into the separator layout of `template`.
+
+    FF3-1 preserves length, so `digits` holds exactly as many characters as
+    `template` holds digits. Consuming one ciphertext digit per digit position
+    returns a value with the same shape and total length as the text it
+    replaces, which matters because the position spans recorded during detection
+    describe the raw match including its separators.
+
+        template="2253-4424-0625-9428", digits="3842316611438829"
+        -> "3842-3166-1143-8829"
+
+    Falls back to returning `digits` unchanged when the counts disagree, so an
+    unexpected response shortens the value rather than scrambling the row.
+    """
+    if len(strip_separators(template)) != len(digits):
+        return digits
+
+    remaining = iter(digits)
+    return "".join(
+        ch if SEPARATOR_PATTERN.match(ch) else next(remaining) for ch in template
+    )
+
+
+def bin_validation(
+    card_number: str, logger2, bin_set: set, bin_prefix_lengths: set = None
+) -> bool:
+    """
+    Validate a candidate card number against the BIN list, then the Luhn checksum.
+
+    The BIN file contains prefixes of differing lengths, so the candidate is
+    tested against each length present rather than a single fixed-width slice.
+    Slicing a fixed 6 digits silently discards every shorter BIN: "60110" can
+    never equal "6011000990139424"[:6] == "601100".
+
     Args:
         card_number (str): The credit card to validate.
         bin_set (set): The BIN set from spark broadcasted values
+        bin_prefix_lengths (set): Prefix lengths present in bin_set, precomputed
+            on the driver and broadcast. Derived from bin_set when not supplied.
     Returns:
         bool: True if the card number is valid, False otherwise.
     """
@@ -638,10 +783,12 @@ def bin_validation(card_number: str, logger2, bin_set: set) -> bool:
         if not card_number.isdigit():
             logger2.error("Non-digit characters in this card")
             return False
-            
-        bin_prefix = card_number[:6]
-        if bin_prefix not in bin_set:
-            # logger2.error(f"BIN not found: {bin_prefix}")
+
+        if bin_prefix_lengths is None:
+            bin_prefix_lengths = {len(b) for b in bin_set}
+
+        if not any(card_number[:n] in bin_set for n in bin_prefix_lengths):
+            # logger2.error(f"BIN not found for any prefix length: {card_number[:6]}")
             return False
             
         # Call your Luhn function
@@ -732,7 +879,11 @@ def encrypt_dataframe_mappartitions(
         encrypted_values_col_name: Column name for encrypted values
         
     Returns:
-        DataFrame: Result dataframe with encrypted values in new column
+        tuple[DataFrame, DataFrame]:
+            - Result dataframe with encrypted values in new column.
+            - The persisted per-value encrypted rows it is built from. The caller
+              owns this cache and must unpersist it only after the output has
+              been written; releasing it earlier re-calls the encryption API.
     """
     
     # Add chunk_id for processing
@@ -804,8 +955,13 @@ def encrypt_dataframe_mappartitions(
                         sensitive_column: row[sensitive_column]
                     })
                     
+                    # Detection validates the separator-free form but records the
+                    # raw match, so the raw form is what arrives here. FF3-1
+                    # accepts digits only: strip separators before encrypting.
+                    # The raw form stays in batch_input_metadata under "value" so
+                    # the ciphertext can be restored to the same layout below.
                     api_input_payload.append(
-                        row["value"]
+                        strip_separators(row["value"])
                     )
                           
                 payload = {
@@ -841,7 +997,12 @@ def encrypt_dataframe_mappartitions(
                             batch_input_metadata,
                             response_json["encryptedData"]["data"]["batch_results"]
                         ):
-                            meta[encrypted_values_col_name] = result
+                            # Restore the separator layout of the raw match so the
+                            # replacement spans the same characters it was measured
+                            # against.
+                            meta[encrypted_values_col_name] = reapply_separator_layout(
+                                meta["value"], result
+                            )
                             all_results.append(meta)
                     except (json.JSONDecodeError, ValueError) as e:
                         logger2.exception("JSON decode error")
@@ -864,8 +1025,6 @@ def encrypt_dataframe_mappartitions(
                         )
 
                         time.sleep(total_delay)
-                        # Re-signed on each attempt: a SigV4 signature is only
-                        # valid for a few minutes and the backoff can exceed that.
                         response = encryption_api(url, headers, payload, logger2)
 
                         if response.status_code == 200:
@@ -876,7 +1035,10 @@ def encrypt_dataframe_mappartitions(
                                     batch_input_metadata,
                                     response_json["encryptedData"]["data"]["batch_results"]
                                 ):
-                                    meta[encrypted_values_col_name] = result
+                                    # Same layout restoration as the non-retry path.
+                                    meta[encrypted_values_col_name] = reapply_separator_layout(
+                                        meta["value"], result
+                                    )
                                     all_results.append(meta)
                                 break
                             except (json.JSONDecodeError, ValueError) as e:
@@ -907,8 +1069,6 @@ def encrypt_dataframe_mappartitions(
                         )
 
                         time.sleep(total_delay)
-                        # Re-signed on each attempt: a SigV4 signature is only
-                        # valid for a few minutes and the backoff can exceed that.
                         response = encryption_api(url, headers, payload, logger2)
 
                         if response.status_code == 200:
@@ -919,7 +1079,10 @@ def encrypt_dataframe_mappartitions(
                                     batch_input_metadata,
                                     response_json["encryptedData"]["data"]["batch_results"]
                                 ):
-                                    meta[encrypted_values_col_name] = result
+                                    # Same layout restoration as the non-retry path.
+                                    meta[encrypted_values_col_name] = reapply_separator_layout(
+                                        meta["value"], result
+                                    )
                                     all_results.append(meta)
                                 break
                             except (json.JSONDecodeError, ValueError) as e:
@@ -947,13 +1110,33 @@ def encrypt_dataframe_mappartitions(
     
         return all_results
     
-    # Apply the function to each partition (partition of rows) for distributed processing
-    encrypted_rdd = partitioned_df.rdd.mapPartitions(process_partition).collect()
+    # Apply the function to each partition (partition of rows) for distributed processing.
+    #
+    # The encrypted rows stay on the executors. collect() would pull every row,
+    # including the full original text of the sensitive column, into driver
+    # memory and then ship it straight back out through createDataFrame.
+    #
+    # Without collect() the result is lazy, so every later Spark action would
+    # re-run process_partition and call the encryption API again. Persisting and
+    # counting here makes this the single point where the API is called. The
+    # caller keeps it persisted until the output is written, because the final
+    # write re-evaluates the whole lineage. A lost cache block costs extra API
+    # calls, not different output: FF3-1 with a fixed key and tweak is
+    # deterministic.
+    #
+    # Do not replace this with checkpoint() to S3: these rows carry the original
+    # plaintext column. MEMORY_AND_DISK may spill to executor-local disk, where
+    # Spark already writes this data's shuffle files.
+    encrypted_rdd = partitioned_df.rdd.mapPartitions(process_partition)
+    encrypted_df = spark.createDataFrame(encrypted_rdd, schema).persist(
+        StorageLevel.MEMORY_AND_DISK
+    )
+    encrypted_count = encrypted_df.count()
+    logger2.info(f"{sensitive_column}: encrypted and cached {encrypted_count} values")
 
+    # Release the input only once encrypted_df is materialised. Unpersisting
+    # before the count would force the input to be rebuilt to compute it.
     partitioned_df.unpersist()
-
-    # Construct dataframe
-    encrypted_df = spark.createDataFrame(encrypted_rdd, schema)
 
     # Transform and aggregate the results
     encrypted_result_df = (
@@ -967,7 +1150,7 @@ def encrypt_dataframe_mappartitions(
         )
     )
 
-    return encrypted_result_df
+    return encrypted_result_df, encrypted_df
 
 
 def merge_encrypted_with_original(

@@ -19,6 +19,14 @@
       "Resource": "${assets_bucket_arn}/*"
     },
     {
+      "Sid": "WriteSparkUILogs",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "${assets_bucket_arn}/${spark_ui_logs_prefix}/*"
+    },
+    {
       "Sid": "S3ListAssetsBucket",
       "Effect": "Allow",
       "Action": [

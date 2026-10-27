@@ -186,3 +186,8 @@ variable "encryption_chunk_size" {
   type        = number
   description = "Number of card values batched into each encryption API request. Tune against measured p99 Lambda duration so a chunk completes well inside the API Gateway integration timeout."
 }
+
+variable "dataset" {
+  type        = string
+  description = "Dataset name passed to the Glue job as --dataset. It selects the treatment contract <dataset>-treatment-contract.yaml."
+}

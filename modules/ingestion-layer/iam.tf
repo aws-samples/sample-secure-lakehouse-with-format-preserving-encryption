@@ -64,6 +64,7 @@ resource "aws_iam_role_policy" "glue_job" {
   policy = templatefile("${path.module}/iam-policies/glue-job/resource-policy.json", {
     quarantine_bucket_arn   = var.quarantine_bucket_arn
     assets_bucket_arn       = "arn:aws:s3:::${var.assets_bucket_name}"
+    spark_ui_logs_prefix    = local.spark_ui_logs_prefix
     kms_key_arn             = var.kms_key_arn
     vault_api_execution_arn = var.vault_api_execution_arn
   })

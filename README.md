@@ -305,9 +305,19 @@ plaintext access and grant it to those roles only.
 
 The pipeline uses a YAML treatment contract (`assets/treatment-contract/cards-treatment-contract.yaml`) to define which columns contain sensitive data. To add new datasets:
 
-1. Create a new YAML contract following the same schema
-2. Update the `dataset` Glue job argument in `terraform.tfvars`
+1. Create `assets/treatment-contract/<dataset>-treatment-contract.yaml` following the same schema
+2. Set `dataset` to the new name under "Ingestion Layer — Glue" in `terraform.tfvars`. Terraform passes it to
+   the Glue job as `--dataset` and uploads the matching contract
 3. Place source files under the correct prefix in quarantine
+
+The job processes one dataset at a time: every file it picks up is treated as the configured `dataset`.
+
+The contract is the complete list of columns the job scans. The job **fails** if the file has a column
+the contract does not list, because an unlisted column would otherwise be copied to the output
+unencrypted. The failure message gives each column's position and name (never values; names holding
+8 or more digits are masked). Either list the column in the contract, which brings it under the same
+card-number scan as the others, or remove it from the file. The quarantine copy is left in place and
+expires under the bucket's lifecycle rule.
 
 ## Expected Output
 

@@ -42,12 +42,12 @@ variable "bin_file_prefix" {
 
 variable "glue_platform" {
   type        = string
-  description = "Target wheel platform for the Glue 5.0 runtime"
+  description = "Target wheel platform for the Glue 6.0 runtime"
   default     = "manylinux2014_x86_64"
 }
 
 variable "glue_python_version" {
   type        = string
-  description = "Target CPython version for the Glue 5.0 runtime"
-  default     = "3.11"
+  description = "Target CPython version of the Glue runtime (Glue 6.0 runs Python 3.13). Must match the job's glue_version: compiled wheels built for another version fail to import."
+  default     = "3.13"
 }

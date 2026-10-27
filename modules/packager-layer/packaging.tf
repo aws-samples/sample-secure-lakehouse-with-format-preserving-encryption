@@ -5,7 +5,8 @@
 # Build-time / deploy-time packaging via a terraform_data + local-exec provisioner.
 # During `terraform apply` (on an internet-connected build host) this:
 #   1. pip-installs requirements.txt (plus all transitive deps) as Glue-runtime
-#      wheels (Linux x86_64 / CPython 3.11), unpacked onto a clean build root so
+#      wheels (Linux x86_64 / CPython per var.glue_python_version, 3.13 for
+#      Glue 6.0), unpacked onto a clean build root so
 #      top-level importable packages sit at the archive root.
 #   2. Adds ALL shared modules (every *.py in shared_modules_dir except the main
 #      job script) at the archive root.
@@ -21,6 +22,11 @@ resource "terraform_data" "dependency_packager" {
   triggers_replace = {
     requirements_hash = filemd5(var.requirements_path)
     archive_key       = local.dependency_archive_key
+
+    # The wheels are built for one CPython version and platform. Changing either
+    # must rebuild the archive, or the job would load wheels for the old runtime.
+    python_version = var.glue_python_version
+    platform       = var.glue_platform
 
     # Hash of every bundled shared module. jsonencode of the map changes if any
     # file content changes, or if a .py file is added/removed.

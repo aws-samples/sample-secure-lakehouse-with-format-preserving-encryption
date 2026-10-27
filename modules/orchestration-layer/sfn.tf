@@ -33,8 +33,7 @@ resource "aws_sfn_state_machine" "pipeline" {
             # missing dependency archive, IAM) fall straight through to Catch.
             ErrorEquals = [
               "Glue.ConcurrentRunsExceededException",
-              "Glue.OperationTimeoutException",
-              "States.TaskFailed"
+              "Glue.OperationTimeoutException"
             ]
             IntervalSeconds = 10
             MaxAttempts     = 3

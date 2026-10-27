@@ -81,13 +81,8 @@ resource "aws_s3_bucket_notification" "quarantine_eventbridge" {
   eventbridge = true
 }
 
-# -----------------------------------------------------------------------------
-# Create the upload prefix as a visible "folder" in S3 console
-# This ensures console users can navigate to the correct path for uploads.
-# -----------------------------------------------------------------------------
-
-resource "aws_s3_object" "upload_prefix" {
-  bucket  = aws_s3_bucket.quarantine.id
-  key     = var.upload_prefix
-  content = ""
-}
+# No placeholder "folder" object is created under the upload prefix. Terraform
+# would have to manage an object in this bucket, but the bucket policy denies
+# object access to the roles that run Terraform, and the lifecycle rule above
+# expires every object after a day. The prefix appears in the console once the
+# first file is uploaded.

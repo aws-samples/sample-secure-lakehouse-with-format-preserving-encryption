@@ -109,19 +109,61 @@ terraform init -backend-config=backend.hcl
 terraform validate
 ```
 
-### 4. Plan terraform
+### 4. Set the Quarantine Bucket Roles
+
+The quarantine bucket policy denies every principal by default. Two settings in `tfvars/terraform.tfvars`
+name the IAM roles that are exempt:
+
+```hcl
+quarantine_deployer_role_names = ["blog-admin"]
+quarantine_uploader_role_names = ["blog-admin"]
+```
+
+`blog-admin` is the example IAM role name used in the blog post. **Replace it with your own role names
+before the first apply.**
+
+| Setting | Set it to | Access granted |
+|---|---|---|
+| `quarantine_deployer_role_names` | The role that runs `terraform apply` | Manage the bucket's configuration. No object access |
+| `quarantine_uploader_role_names` | The role that uploads source files (step 8) | Upload objects only. No read, list, or delete |
+
+The deployer role must be correct. If the role running `terraform apply` is not listed, the first apply
+writes a bucket policy that denies that role access to the policy itself, and every later plan fails with
+`AccessDenied` on the quarantine bucket. Recovery requires a role the policy still allows, such as the
+`enc-blog-iam-quarantine-ops-admin-role` break-glass role.
+
+To find your role name, run:
+
+```bash
+aws sts get-caller-identity --query Arn --output text
+# arn:aws:sts::111122223333:assumed-role/<role-name>/<session-name>
+```
+
+Use the `<role-name>` part, not the full ARN. If the role has an IAM path, include it. The `sts` ARN above
+does not show the path, so check the role itself:
+
+```bash
+aws iam get-role --role-name <role-name> --query Role.Arn --output text
+# arn:aws:iam::111122223333:role/<path>/<role-name>
+```
+
+For example, IAM Identity Center roles have a path such as `aws-reserved/sso.amazonaws.com/`, so you would set
+`["aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_abc123"]`. Terraform adds the
+account ID itself, so the setting holds no account-specific ARNs.
+
+### 5. Plan terraform
 
 ```bash
 terraform plan -var-file=tfvars/terraform.tfvars
 ```
 
-### 5. Apply terraform
+### 6. Apply terraform
 
 ```bash
 terraform apply -var-file=tfvars/terraform.tfvars
 ```
 
-### 6. Seed FPE Key Material (one-time)
+### 7. Seed FPE Key Material (one-time)
 
 After the first deploy, invoke the secret generator Lambda to seed the FPE encryption keys into Secrets Manager:
 
@@ -137,7 +179,7 @@ To rotate/regenerate the FPE key material:
 aws lambda invoke --function-name enc-blog-lambda-secret-generator-function --cli-binary-format raw-in-base64-out --payload '{"force": true}' /tmp/seed-output.json && cat /tmp/seed-output.json
 ```
 
-### 7. Test the Pipeline
+### 8. Test the Pipeline
 
 Upload a CSV file to the quarantine bucket under the `transaction/data/` prefix (required — EventBridge only triggers for this prefix):
 
@@ -305,9 +347,19 @@ plaintext access and grant it to those roles only.
 
 The pipeline uses a YAML treatment contract (`assets/treatment-contract/cards-treatment-contract.yaml`) to define which columns contain sensitive data. To add new datasets:
 
-1. Create a new YAML contract following the same schema
-2. Update the `dataset` Glue job argument in `terraform.tfvars`
+1. Create `assets/treatment-contract/<dataset>-treatment-contract.yaml` following the same schema
+2. Set `dataset` to the new name under "Ingestion Layer — Glue" in `terraform.tfvars`. Terraform passes it to
+   the Glue job as `--dataset` and uploads the matching contract
 3. Place source files under the correct prefix in quarantine
+
+The job processes one dataset at a time: every file it picks up is treated as the configured `dataset`.
+
+The contract is the complete list of columns the job scans. The job **fails** if the file has a column
+the contract does not list, because an unlisted column would otherwise be copied to the output
+unencrypted. The failure message gives each column's position and name (never values; names holding
+8 or more digits are masked). Either list the column in the contract, which brings it under the same
+card-number scan as the others, or remove it from the file. The quarantine copy is left in place and
+expires under the bucket's lifecycle rule.
 
 ## Expected Output
 

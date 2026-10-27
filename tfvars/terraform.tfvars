@@ -38,6 +38,20 @@ quarantine_noncurrent_expiration_days = 1
 ops_admin_external_id          = "enc-blog-quarantine-cleanup"
 ops_admin_max_session_duration = 3600
 
+# "blog-admin" below is the example IAM role name used in the blog post.
+# Replace it with your own role names before the first apply; see
+# "Set the Quarantine Bucket Roles" in the README.
+#
+# Roles that run terraform apply. They may manage the quarantine bucket's
+# configuration but are denied its objects. Role names only, including any IAM
+# path; the account ID comes from the caller. Leaving out the deploying role
+# locks it out of the bucket policy on the first apply.
+quarantine_deployer_role_names = ["blog-admin"]
+
+# Roles that upload source files (aws s3 cp) to start a pipeline run.
+# Write-only: they cannot read, list, or delete objects in the bucket.
+quarantine_uploader_role_names = ["blog-admin"]
+
 # -----------------------------------------------------------------------------
 # Landing Layer
 # -----------------------------------------------------------------------------
@@ -88,13 +102,18 @@ notify_lambda_memory_size = 128
 
 glue_job_name          = "enc-blog-glue-encryption-job"
 glue_worker_type       = "G.1X"
-glue_number_of_workers = 2
+glue_number_of_workers = 4
 glue_timeout           = 60
 glue_max_retries       = 0
 
 # Card values batched into each encryption API request. Raise gradually during load
 # testing, keeping p99 Lambda duration well under the API Gateway integration timeout.
 encryption_chunk_size = 15000
+
+# Dataset the Glue job processes (--dataset). It selects the treatment contract
+# assets/treatment-contract/<dataset>-treatment-contract.yaml, which Terraform
+# uploads and the job reads. Letters, digits, underscores and hyphens only.
+dataset = "cards"
 
 # -----------------------------------------------------------------------------
 # Landing Layer — Copy Lambda

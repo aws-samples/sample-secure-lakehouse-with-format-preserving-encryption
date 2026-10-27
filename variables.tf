@@ -79,6 +79,42 @@ variable "ops_admin_max_session_duration" {
   description = "Maximum session duration in seconds for the quarantine Ops Admin role (time-bound access)"
 }
 
+variable "quarantine_deployer_role_names" {
+  type        = list(string)
+  description = "Names (including any IAM path) of the roles that run terraform apply. They may manage the quarantine bucket's configuration but are denied its objects."
+
+  # An empty list recreates the lockout: the first apply would deny the
+  # deploying role access to the bucket policy it has just written.
+  validation {
+    condition     = length(var.quarantine_deployer_role_names) > 0
+    error_message = "Set at least one deployer role, or the first apply locks the deploying role out of the quarantine bucket."
+  }
+
+  # A full ARN, or the sts assumed-role ARN printed in error messages, would
+  # build an invalid principal. The account ID is added from the caller.
+  validation {
+    condition = alltrue([
+      for name in var.quarantine_deployer_role_names :
+      can(regex("^[A-Za-z0-9+=,.@_-]+(/[A-Za-z0-9+=,.@_-]+)*$", name))
+    ])
+    error_message = "Give role names only, such as \"blog-admin\" or \"path/blog-admin\", not ARNs."
+  }
+}
+
+variable "quarantine_uploader_role_names" {
+  type        = list(string)
+  default     = []
+  description = "Names (including any IAM path) of the roles that upload source files into the quarantine bucket. Write-only: they cannot read, list, or delete objects. Empty means only the pipeline roles can write."
+
+  validation {
+    condition = alltrue([
+      for name in var.quarantine_uploader_role_names :
+      can(regex("^[A-Za-z0-9+=,.@_-]+(/[A-Za-z0-9+=,.@_-]+)*$", name))
+    ])
+    error_message = "Give role names only, such as \"blog-admin\" or \"path/blog-admin\", not ARNs."
+  }
+}
+
 # -----------------------------------------------------------------------------
 # Landing Layer
 # -----------------------------------------------------------------------------
@@ -207,6 +243,17 @@ variable "glue_timeout" {
 variable "encryption_chunk_size" {
   type        = number
   description = "Number of card values batched into each encryption API request. Tune against measured p99 Lambda duration so a chunk completes well inside the API Gateway integration timeout."
+}
+
+variable "dataset" {
+  type        = string
+  description = "Dataset name passed to the Glue job as --dataset. It selects the treatment contract, assets/treatment-contract/<dataset>-treatment-contract.yaml, which Terraform uploads and the job reads."
+
+  # The name becomes part of a file name and an S3 key.
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9_-]*$", var.dataset))
+    error_message = "dataset may contain only letters, digits, underscores and hyphens, and must start with a letter or digit."
+  }
 }
 
 variable "glue_max_retries" {

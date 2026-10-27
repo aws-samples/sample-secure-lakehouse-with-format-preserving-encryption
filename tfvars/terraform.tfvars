@@ -38,6 +38,10 @@ quarantine_noncurrent_expiration_days = 1
 ops_admin_external_id          = "enc-blog-quarantine-cleanup"
 ops_admin_max_session_duration = 3600
 
+# "blog-admin" below is the example IAM role name used in the blog post.
+# Replace it with your own role names before the first apply; see
+# "Set the Quarantine Bucket Roles" in the README.
+#
 # Roles that run terraform apply. They may manage the quarantine bucket's
 # configuration but are denied its objects. Role names only, including any IAM
 # path; the account ID comes from the caller. Leaving out the deploying role

@@ -350,11 +350,57 @@ def require_columns_listed_in_contract(
     raise UnlistedColumnsError(message)
 
 
+class MissingContractColumnsError(Exception):
+    """The input file lacks columns the treatment contract lists."""
+
+
+def require_contract_columns_present(
+    columns: list, sensitive_columns: list, logger2, max_listed: int = 20
+) -> None:
+    """Fail when the input is missing columns the treatment contract lists.
+
+    Without this check, the run scans and encrypts every column that is present
+    (calling the encryption API) and only fails when it reaches the missing one,
+    with a raw Spark UNRESOLVED_COLUMN error. Checking up front fails the run
+    before any scanning, with a clear message.
+
+    Names are compared case-insensitively, as Spark resolves them. Only contract
+    field names are reported; input values are never included.
+
+    Raises:
+        MissingContractColumnsError: listing each contract column not in the input.
+    """
+    present = {name.lower() for name in columns}
+    missing = [
+        field
+        for field in ((c.get("fieldName") or "") for c in sensitive_columns)
+        if field and field.lower() not in present
+    ]
+    if not missing:
+        return
+
+    shown = ", ".join(repr(_loggable_column_name(name)) for name in missing[:max_listed])
+    more = len(missing) - max_listed
+    if more > 0:
+        shown += f", and {more} more"
+
+    message = (
+        f"The input is missing {len(missing)} column(s) that the treatment "
+        f"contract lists: {shown}. Add each one to the file, or remove it from "
+        f"the contract."
+    )
+    logger2.error(message)
+    raise MissingContractColumnsError(message)
+
+
 def processing_sensitive_columns(args, spark: SparkSession, logger2, input_df: DataFrame, sensitive_columns: list):
     logger2.info("===============")
 
-    # Before anything is scanned or sent to the encryption API.
+    # Before anything is scanned or sent to the encryption API. The unlisted
+    # check runs first: a headerless file turns data into column names, and it
+    # masks them before logging.
     require_columns_listed_in_contract(input_df.columns, sensitive_columns, logger2)
+    require_contract_columns_present(input_df.columns, sensitive_columns, logger2)
 
     df_row_ids = add_row_indexes(input_df)
     logger2.info("=================")
@@ -1352,6 +1398,9 @@ def write_df_to_s3_csv_bz2(args, df: DataFrame, logger2) -> None:
     encrypted_key = f"s3://{bucket_name}/{parent_path}/encrypted/{file_name}"
     logger2.info(f"Encryption key: {encrypted_key}")
 
+    # A failed write must fail the Glue run. Swallowing it lets the job report
+    # SUCCEEDED with no output, and the failure only surfaces later as a
+    # FileNotFoundError in the Copy Lambda.
     try:
         df.coalesce(1) \
             .write.format("csv") \
@@ -1359,10 +1408,8 @@ def write_df_to_s3_csv_bz2(args, df: DataFrame, logger2) -> None:
             .option("compression", "bzip2") \
             .mode("overwrite") \
             .save(encrypted_key)
+    except Exception:
+        logger2.exception(f"Failed to write encrypted output to {encrypted_key}")
+        raise
 
-        logger2.info(f"Successfully wrote Dataframe to {encrypted_key}")
-
-    except Exception as e:
-        logger2.exception("An exception occurred")
-
-    logger2.info(f"📦 File uploaded to s3://{bucket_name}/{encrypted_key}")
+    logger2.info(f"Successfully wrote DataFrame to {encrypted_key}")

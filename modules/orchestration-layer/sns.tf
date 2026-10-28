@@ -19,8 +19,12 @@ resource "aws_sns_topic" "pipeline_failure" {
 # SNS Subscription: Email notification endpoint
 # -----------------------------------------------------------------------------
 
+# One subscription per address. Each recipient receives an SNS confirmation
+# email and gets no notifications until they confirm it.
 resource "aws_sns_topic_subscription" "email_notification" {
+  for_each = toset(var.notification_emails)
+
   topic_arn = aws_sns_topic.pipeline_failure.arn
   protocol  = "email"
-  endpoint  = var.notification_email
+  endpoint  = each.value
 }

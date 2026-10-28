@@ -191,9 +191,9 @@ variable "sns_topic_name" {
   description = "Name of the SNS topic for pipeline failure notifications"
 }
 
-variable "notification_email" {
-  type        = string
-  description = "Email address to receive pipeline failure notifications"
+variable "notification_emails" {
+  type        = list(string)
+  description = "Email addresses that receive pipeline success/failure notifications. Each address must confirm its SNS subscription."
 }
 
 variable "notify_lambda_name" {

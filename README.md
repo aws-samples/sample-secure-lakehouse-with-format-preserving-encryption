@@ -2,8 +2,8 @@
 
 A Terraform-based infrastructure project demonstrating a pattern that can support PCI DSS scope reduction by applying **application-side Format-Preserving Encryption (FPE)** — encrypting sensitive values inside an AWS Glue job *before* the data reaches the Lakehouse raw zone — with an event-driven pipeline.
 
-> **Terminology note:** This solution uses *application-side* FPE, not AWS "client-side encryption" (as in the AWS Encryption SDK / S3 client-side encryption, where the client encrypts before data reaches AWS storage). Here, raw files land in the quarantine bucket in cleartext and are encrypted server-side within the pipeline. See [Handling the Plaintext Window](#handling-the-plaintext-window) for how that transient cleartext exposure is controlled.
-
+> **Terminology note:** This solution uses *application-side* FPE, not AWS "client-side encryption" (as in the AWS Encryption SDK / S3 client-side encryption, where the client encrypts before data reaches AWS storage). Here, raw files land in the quarantine bucket in cleartext and are encrypted server-side within the pipeline. See
+[Handling the Plaintext Window](#handling-the-plaintext-window) for how that transient cleartext exposure is controlled.
 > **Disclaimer**: This is sample code accompanying an AWS blog post. It is provided for educational
 > purposes only. Do not deploy to production without the additional hardening listed in
 > [SECURITY.md](SECURITY.md), including (but not limited to) Lambda DLQs, KMS encryption of Lambda
@@ -123,7 +123,7 @@ quarantine_uploader_role_names = ["blog-admin"]
 before the first apply.**
 
 | Setting | Set it to | Access granted |
-|---|---|---|
+| --- | --- | --- |
 | `quarantine_deployer_role_names` | The role that runs `terraform apply` | Manage the bucket's configuration. No object access |
 | `quarantine_uploader_role_names` | The role that uploads source files (step 8) | Upload objects only. No read, list, or delete |
 
@@ -262,14 +262,14 @@ The Copy Lambda then moves the encrypted file to the landing bucket and cleans u
 
 The Vault Transform API enforces two independent controls. A request must satisfy both.
 
-**1. Network boundary — API Gateway resource policy**
+### Network boundary — API Gateway resource policy
 
 The REST API is `PRIVATE` and its resource policy allows `execute-api:Invoke` only when
 `aws:sourceVpce` matches the `execute-api` interface endpoint in the VPC. A second statement
 explicitly denies invocation when `aws:sourceVpce` does not match, so the API cannot be reached
 from the internet or from another VPC even if an identity policy would otherwise allow it.
 
-**2. Identity — AWS_IAM authorization**
+### Identity — AWS_IAM authorization
 
 `POST /transform/encrypt` is configured with `authorization = "AWS_IAM"`. Every request must be
 SigV4-signed by a principal whose IAM policy allows `execute-api:Invoke` on that method. Being
@@ -293,7 +293,7 @@ exact bytes transmitted, so re-serializing (for example by passing `json=payload
 can invalidate the signature. Each retry re-signs, because a signature expires within minutes and
 the retry backoff can exceed that window.
 
-**The `X-Vault-*` headers are not credentials**
+### The `X-Vault-*` headers are not credentials
 
 `build_headers()` sends `X-Vault-Request`, `X-Vault-Namespace` and `X-Vault-Token` so the request
 shape matches what a HashiCorp Vault Transform engine expects, which keeps the sample portable to a
@@ -311,7 +311,7 @@ includes these custom headers in the signed header set
 so they are covered by the request's integrity check: an intermediary that rewrites or strips one
 causes a signature mismatch rather than the header being silently ignored.
 
-**Encrypt and decrypt are granted separately**
+### Encrypt and decrypt are granted separately
 
 `POST /transform/encrypt` is the only method this sample exposes. The Glue role's IAM policy is
 scoped to that exact method:
@@ -329,19 +329,37 @@ Because the resource path includes the method, adding a decrypt endpoint does no
 it to existing callers. A decrypt method would be a distinct API Gateway resource with its own
 resource-policy statement and its own identity policy, granted to a separate role.
 
-**Who can decrypt**
+### Who can decrypt
 
 No principal in this sample can reverse FPE through the API, because no decrypt endpoint is
 deployed. The ability to decrypt is equivalent to reading the FPE key material, which is limited
 to two roles:
 
 | Role | Access | Purpose |
-|------|--------|---------|
+| ------ | -------- | --------- |
 | `enc-blog-iam-encryption-api-role` | `secretsmanager:GetSecretValue` on the FPE secret, `kms:Decrypt` on the CMK | Reads key material to perform FF3-1 encryption inside the Lambda |
 | `enc-blog-iam-secret-generator-role` | `secretsmanager:PutSecretValue`, `kms:GenerateDataKey`, `kms:Decrypt` | Seeds and rotates key material |
 
 The Glue role holds neither. Before exposing a decrypt endpoint, decide which principals need
 plaintext access and grant it to those roles only.
+
+## Handling the Plaintext Window
+
+Encryption happens *inside* the pipeline (application-side), not before upload. Raw files containing PANs therefore land in the **quarantine bucket in cleartext** and stay there until the Glue job encrypts them and the Copy Lambda moves the result to the landing bucket. In PCI DSS terms, the quarantine bucket is **in-scope Cardholder Data Environment (CDE) storage** for that window. The solution does not claim that unencrypted PAN data never exists; it bounds and locks down the exposure:
+
+- **Bounded persistence (S3 Lifecycle).** A lifecycle rule (`modules/quarantine-layer/s3.tf`) expires every object after `quarantine_expiration_days` (default: **1 day**) and purges noncurrent versions after `quarantine_noncurrent_expiration_days` (default: **1 day**). Incomplete multipart uploads are aborted after 1 day. If a run stalls or fails, plaintext cannot linger indefinitely.
+- **Deny-by-default access (S3 Bucket Policy).** A resource policy (`security.tf`) applies explicit `Deny` statements, which override any identity-based `Allow`, including for administrators:
+  - **Object access** is denied to every principal except the Glue role, the Copy Lambda role and the break-glass Ops Admin role.
+  - **Uploader roles** (`quarantine_uploader_role_names`) are exempt for upload only (`s3:PutObject`, `s3:AbortMultipartUpload`). They cannot read, list or delete objects.
+  - **Deployer roles** (`quarantine_deployer_role_names`) may manage the bucket's configuration (policy, encryption, versioning, lifecycle, notifications) and list object keys, but cannot read object contents.
+- **Least-privilege pipeline roles.** The Glue role can read and write objects in the quarantine bucket (it writes the `/encrypted` output) but cannot list or delete. The Copy Lambda role can read, list and delete in quarantine and write to the landing bucket, but cannot write to quarantine.
+- **Time-bound break-glass access.** The Ops Admin cleanup role (`enc-blog-iam-quarantine-ops-admin-role`) exists only to remediate orphaned plaintext, for example after a stalled run. Its trust policy requires an external ID (`ops_admin_external_id`) and caps sessions at `ops_admin_max_session_duration` (default: **1 hour**).
+- **TLS enforced in transit.** The bucket policy denies any request where `aws:SecureTransport` is `false`.
+- **Encryption at rest.** Objects in quarantine are encrypted with S3 SSE-KMS using the project CMK, public access is fully blocked and versioning is enabled.
+
+> **Note on versioning:** The Copy Lambda deletes the source object without a version ID, which adds a delete marker. The original plaintext remains as a noncurrent version until the lifecycle rule purges it (`quarantine_noncurrent_expiration_days`). Keep that value short, or use the Ops Admin role to remove versions sooner.
+
+Together these controls keep the plaintext window short-lived, tightly scoped and auditable.
 
 ## Treatment Contract
 

@@ -159,7 +159,7 @@ module "orchestration_layer" {
   cloudwatch_write_policy_arn = module.common_layer.cloudwatch_write_policy_arn
   sns_topic_name              = var.sns_topic_name
   kms_key_arn                 = module.common_layer.kms_key_arn
-  notification_email          = var.notification_email
+  notification_emails         = var.notification_emails
   private_subnet_ids          = module.common_layer.private_subnet_ids
   lambda_security_group_id    = module.common_layer.lambda_security_group_id
   notify_lambda_name          = var.notify_lambda_name

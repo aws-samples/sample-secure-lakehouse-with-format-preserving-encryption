@@ -87,8 +87,9 @@ lambda_trigger_memory_size = 128
 state_machine_name = "enc-blog-sfn-pipeline-workflow"
 
 # SNS topic for pipeline failure notifications
-sns_topic_name     = "enc-blog-sns-pipeline-failure-topic"
-notification_email = "iamsudh@amazon.com"
+sns_topic_name = "enc-blog-sns-pipeline-failure-topic"
+# Each address receives an SNS confirmation email and must confirm it.
+notification_emails = ["iamsudh@amazon.com", "nickhxd@amazon.com"]
 
 # Notification formatter Lambda
 notify_lambda_name        = "enc-blog-lambda-notification-function"

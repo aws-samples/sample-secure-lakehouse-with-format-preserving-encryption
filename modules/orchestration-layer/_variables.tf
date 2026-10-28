@@ -51,9 +51,19 @@ variable "kms_key_arn" {
   description = "KMS key ARN for encrypting the SNS topic at rest"
 }
 
-variable "notification_email" {
-  type        = string
-  description = "Email address to receive pipeline failure notifications via SNS"
+variable "notification_emails" {
+  type        = list(string)
+  description = "Email addresses that receive pipeline success/failure notifications via SNS (one subscription per address)"
+
+  validation {
+    condition     = length(var.notification_emails) > 0
+    error_message = "notification_emails must contain at least one email address."
+  }
+
+  validation {
+    condition     = alltrue([for e in var.notification_emails : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", e))])
+    error_message = "Every entry in notification_emails must be a valid email address."
+  }
 }
 
 # -----------------------------------------------------------------------------

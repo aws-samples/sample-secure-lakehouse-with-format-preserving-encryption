@@ -2,8 +2,7 @@
 
 A Terraform-based infrastructure project demonstrating a pattern that can support PCI DSS scope reduction by applying **application-side Format-Preserving Encryption (FPE)** — encrypting sensitive values inside an AWS Glue job *before* the data reaches the Lakehouse raw zone — with an event-driven pipeline.
 
-> **Terminology note:** This solution uses *application-side* FPE, not AWS "client-side encryption" (as in the AWS Encryption SDK / S3 client-side encryption, where the client encrypts before data reaches AWS storage). Here, raw files land in the quarantine bucket in cleartext and are encrypted server-side within the pipeline. See
-[Handling the Plaintext Window](#handling-the-plaintext-window) for how that transient cleartext exposure is controlled.
+> **Terminology note:** This solution uses *application-side* FPE, not AWS "client-side encryption" (as in the AWS Encryption SDK / S3 client-side encryption, where the client encrypts before data reaches AWS storage). Here, raw files land in the quarantine bucket in cleartext and are encrypted server-side within the pipeline. See [Handling the Plaintext Window](#handling-the-plaintext-window) for how that transient cleartext exposure is controlled.
 > **Disclaimer**: This is sample code accompanying an AWS blog post. It is provided for educational
 > purposes only. Do not deploy to production without the additional hardening listed in
 > [SECURITY.md](SECURITY.md), including (but not limited to) Lambda DLQs, KMS encryption of Lambda
